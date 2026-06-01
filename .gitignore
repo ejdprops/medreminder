@@ -1,0 +1,18 @@
+# Lock files
+*.lck
+
+# DRC reports
+DRC.rpt
+report.txt
+
+# Gerber outputs (regenerate from source)
+gerbers/
+*.zip
+
+# KiCad backup files
+*.bak
+*-backups/
+.history/
+
+# Images
+*.png
