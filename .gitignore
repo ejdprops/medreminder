@@ -16,3 +16,12 @@ gerbers/
 
 # Images
 *.png
+firmware/build*/
+firmware/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.*
+!firmware/sdkconfig.defaults*
+firmware/*.log
+firmware/log.*.txt
+*-backups/
+fp-info-cache
