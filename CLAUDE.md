@@ -75,7 +75,7 @@ firmware/
 ├── THIRD_PARTY_LICENSES  copied third-party code (Waveshare BSP, ...)
 └── boards/c5_waveshare/
     ├── target                     esp32c5
-    ├── esp_matter_device.cmake    led_type ws2812, button_type iot
+    ├── esp_matter_device.cmake    led_type hollow_led (no-op), button_type iot
     ├── sdkconfig.defaults         32MB flash, PSRAM 80MHz, custom partitions, coredump to flash
     ├── sdkconfig.defaults.thread  Thread-only Matter config
     ├── partitions.csv
@@ -116,8 +116,8 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
 | BOOT button (active low) | 28 |
 | Console UART | 11 / 12 |
 
-- **Never drive GPIO27**: it is the codec's output to the MCU. The light example's LED was moved to
-  GPIO26 (MCU-driven codec input, harmless; there is no physical LED).
+- **Never drive GPIO27**: it is the codec's output to the MCU. GPIO26 is I2S DOUT (MCU to codec):
+  the light example's LED uses the no-op `hollow_led` driver (there is no physical LED).
 - LCD reset, touch reset, backlight PWM and speaker amp enable are on a **CH32V003 IO expander at I2C
   0x24** (EXIO0 touch reset, EXIO1 LCD reset, EXIO3 amp enable). The screen stays dark until firmware
   talks to it.
@@ -207,8 +207,26 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
       (POSIX, default US Central `CST6CDT,M3.2.0,M11.1.0`), `MEDREMINDER_NTP_SERVER`
       (`pool.ntp.org`). Costs ~2.5KB internal RAM (60.2KB idle, min 27.7KB).
     - 7b.6 (done) five-pill home screen (above), replacing the circle + corner tiles on the C5.
-  - **7c** overdue alert sound: ES8311 via Waveshare `bsp_extra` (`bsp_extra_i2s_write`), short WAV
-    files in the `storage` partition, amp enabled via EXIO3. No MP3 decoder. Speaker 4–8Ω.
+  - **7c** overdue alert sound: ES8311 via the BSP, short WAV files in the `storage` partition, amp
+    enabled via EXIO3. No MP3 decoder. Speaker 4–8Ω (connected).
+    - 7c.1 (done) `main/audio.c`: queue-fed audio task, `audio_play(AUDIO_CLICK | AUDIO_PREVIEW)`,
+      volume 0-100 in NVS (`audio`/`volume`, default 60) via the settings slider (saved + preview
+      beeps on release). Clicks on taps that change something: gear, Back, "Show setup code",
+      tapping the center (next) pill marks it taken and rotates the pills (placeholder data, resets
+      on reboot; consider undo by tapping the UR "most recent" pill).
+      - BSP made speaker-only (no I2S RX, ES8311 DAC mode). The esp-matter LED is `hollow_led`:
+        GPIO26 is I2S DOUT and must not be driven by the WS2812/RMT driver.
+      - Codec + I2S + amp come up on the first sound and shut down 3 s after the last one, so
+        idle internal RAM is unchanged (61.5KB idle, boot min ~29KB; ~3-6KB while sounding).
+        `heap_caps_get_minimum_free_size` sums per-region lows, so "min" can drop after a sound
+        even though free never went that low.
+      - Amp (EXIO3) needs ~150ms after enable before sound is heard (`AMP_SETTLE_MS`); toggling
+        it per sound swallowed short clicks. Writes return when samples are queued in the 90ms
+        I2S DMA buffer, so push `DMA_FLUSH_MS` of silence before muting.
+      - Audio must start from the BSP init task (`ui.c` calls `audio_start()` after display start):
+        BSP init functions are not thread-safe.
+      - **TODO:** try different tones for the click and for the alert (current: click 1800Hz 30ms,
+        preview 2 x 880Hz 150ms) and pick by ear. First click after idle lags ~0.2s (amp start).
   - **7d** (later) background images from SD (JPEG via esp_new_jpeg into PSRAM; SD shares the LCD SPI
     bus, so load once) or from `storage`.
 - Licensing: Waveshare code is Apache-2.0. Keep headers on copied files and list them in a

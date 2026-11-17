@@ -12,6 +12,7 @@
 
 #include <esp_log.h>
 
+#include "audio.h"
 #include "fonts/fonts.h"
 #include "fw_version.h"
 #include "icons/icons.h"
@@ -22,6 +23,8 @@ static const char *TAG = "ui_home";
 
 static lv_obj_t *s_date_label;
 static lv_obj_t *s_time_label;
+static lv_obj_t *s_dose_area; /* holds the pills; rebuilt when a dose is taken */
+static int s_last_minute = -1; /* clock labels last drawn for this minute */
 
 typedef enum { DOSE_TAKEN, DOSE_NEXT, DOSE_LATER, DOSE_OVERDUE } dose_state_t;
 
@@ -31,8 +34,8 @@ typedef struct {
     dose_state_t state;
 } dose_t;
 
-/* Placeholder data, in daily order */
-static const dose_t s_doses[] = {
+/* Placeholder data, in daily order. Tapping the next dose marks it taken (resets on reboot). */
+static dose_t s_doses[] = {
     {"Evan", "AM", DOSE_TAKEN},
     {"Karen", "AM", DOSE_TAKEN},
     {"Karen", "MID", DOSE_NEXT},
@@ -87,6 +90,7 @@ static void settings_cb(lv_event_t *e)
     (void)e;
     ESP_LOGI(TAG, "settings tap");
     ui_settings_open();
+    audio_play(AUDIO_CLICK);
 }
 
 static void build_top_line(lv_obj_t *scr)
@@ -157,6 +161,37 @@ static lv_obj_t *pill_base(lv_obj_t *parent, const dose_t *d, int32_t w, int32_t
     return pill;
 }
 
+static void build_doses(lv_obj_t *area);
+
+static void rebuild_doses(void *arg)
+{
+    (void)arg;
+    lv_obj_clean(s_dose_area);
+    build_doses(s_dose_area);
+    s_last_minute = -1; /* the round layout's time label was recreated */
+}
+
+static void take_cb(lv_event_t *e)
+{
+    dose_t *d = lv_event_get_user_data(e);
+    if (d->state == DOSE_TAKEN) {
+        return;
+    }
+    d->state = DOSE_TAKEN;
+    ESP_LOGI(TAG, "taken: %s %s", d->name, d->slot);
+    audio_play(AUDIO_CLICK);
+    lv_async_call(rebuild_doses, NULL); /* not from inside the pill's own event */
+}
+
+/* The next dose's pill marks it taken on tap */
+static void make_takeable(lv_obj_t *pill, dose_t *d)
+{
+    lv_obj_add_flag(pill, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(pill, lv_color_lighten(lv_color_hex(s_pill_colors[d->state][0]), LV_OPA_20),
+                              LV_STATE_PRESSED);
+    lv_obj_add_event_cb(pill, take_cb, LV_EVENT_CLICKED, d);
+}
+
 #if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
 /* Two columns of 148 (8px margins and gap) and three rows of 50 (8px gaps) fill the 320x166 area
  * between the top line (y 0-30) and the status row (y 200-240). */
@@ -175,10 +210,10 @@ static const struct {
     {-2, 8, 32},    /* upper left: taken two ago */
 };
 
-static void build_pill(lv_obj_t *scr, const dose_t *d, int32_t x, int32_t y)
+static lv_obj_t *build_pill(lv_obj_t *area, const dose_t *d, int32_t x, int32_t y)
 {
     const uint32_t *c = s_pill_colors[d->state];
-    lv_obj_t *pill = pill_base(scr, d, PILL_W, PILL_H);
+    lv_obj_t *pill = pill_base(area, d, PILL_W, PILL_H);
     lv_obj_set_pos(pill, x, y);
     lv_obj_set_style_pad_hor(pill, 18, 0);
     lv_obj_set_flex_flow(pill, LV_FLEX_FLOW_COLUMN);
@@ -189,9 +224,10 @@ static void build_pill(lv_obj_t *scr, const dose_t *d, int32_t x, int32_t y)
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     char buf[24];
     label(pill, slot_text(d, buf, sizeof(buf)), &inter_14_semibold, c[2]);
+    return pill;
 }
 
-static void build_doses(lv_obj_t *scr)
+static void build_doses(lv_obj_t *area)
 {
     /* Next = first dose not yet taken; if all are taken, the cycle starts over at the first */
     int next = 0;
@@ -204,14 +240,17 @@ static void build_doses(lv_obj_t *scr)
     /* Fill center, then the nearest offsets, so fewer than five doses never repeat a pill */
     for (int p = 0; p < (int)(sizeof(s_positions) / sizeof(s_positions[0])) && p < DOSE_COUNT; p++) {
         int i = ((next + s_positions[p].offset) % DOSE_COUNT + DOSE_COUNT) % DOSE_COUNT;
-        build_pill(scr, &s_doses[i], s_positions[p].x, s_positions[p].y);
+        lv_obj_t *pill = build_pill(area, &s_doses[i], s_positions[p].x, s_positions[p].y);
+        if (s_positions[p].offset == 0) {
+            make_takeable(pill, &s_doses[i]);
+        }
     }
 }
 #else
 /* Round screens: the day's pills inside a 168px circle with a TODAY/time header */
-static void build_doses(lv_obj_t *scr)
+static void build_doses(lv_obj_t *area)
 {
-    lv_obj_t *circle = plain_obj(scr);
+    lv_obj_t *circle = plain_obj(area);
     lv_obj_set_size(circle, 168, 168);
     lv_obj_set_pos(circle, 76, 32);
     lv_obj_set_style_radius(circle, LV_RADIUS_CIRCLE, 0);
@@ -223,9 +262,14 @@ static void build_doses(lv_obj_t *scr)
 
     s_time_label = label(circle, "TODAY · --:--", &inter_8, 0x6b7280);
     lv_obj_set_style_text_letter_space(s_time_label, 1, 0);
+    bool next_found = false;
     for (int i = 0; i < DOSE_COUNT; i++) {
-        const dose_t *d = &s_doses[i];
+        dose_t *d = &s_doses[i];
         lv_obj_t *pill = pill_base(circle, d, 104, 20);
+        if (!next_found && d->state != DOSE_TAKEN) {
+            next_found = true;
+            make_takeable(pill, d);
+        }
         lv_obj_set_style_pad_hor(pill, 9, 0);
         lv_obj_set_flex_flow(pill, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(pill, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
@@ -271,7 +315,6 @@ static void build_status_row(lv_obj_t *scr)
 static void clock_timer_cb(lv_timer_t *t)
 {
     (void)t;
-    static int last_minute = -1;
     if (!time_is_valid()) {
         return;
     }
@@ -279,10 +322,10 @@ static void clock_timer_cb(lv_timer_t *t)
     struct tm tm;
     localtime_r(&now, &tm);
     int minute = tm.tm_yday * 1440 + tm.tm_hour * 60 + tm.tm_min;
-    if (minute == last_minute) {
+    if (minute == s_last_minute) {
         return;
     }
-    last_minute = minute;
+    s_last_minute = minute;
 
     static const char *const days[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
     static const char *const months[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -303,7 +346,10 @@ void ui_home_create(lv_obj_t *scr)
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
     build_top_line(scr);
-    build_doses(scr);
+    /* Transparent, non-clickable area in screen coordinates, so pill positions stay absolute */
+    s_dose_area = plain_obj(scr);
+    lv_obj_set_size(s_dose_area, 320, 200);
+    build_doses(s_dose_area);
     build_status_row(scr);
 
     lv_obj_t *ver = label(scr, fw_version_short(), &inter_8, 0x6b7280);

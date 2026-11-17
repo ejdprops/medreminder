@@ -1,5 +1,7 @@
 #include "ui.h"
 
+#include "audio.h"
+
 #include <esp_log.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/idf_additions.h>
@@ -32,6 +34,8 @@ static void ui_init_task(void *arg)
         } else {
             ESP_LOGI(TAG, "UI started");
         }
+        /* Audio shares the BSP's I2C bus and IO expander, which display start brought up */
+        audio_start();
     }
     vTaskDeleteWithCaps(NULL);
 }

@@ -7,7 +7,8 @@ Waveshare ESP32-C5-Touch-LCD-2.8 BSP
   License: Apache-2.0 (full text: boards/c5_waveshare/components/esp32_c5_touch_lcd_2_8/LICENSE)
   Files:
     boards/c5_waveshare/components/esp32_c5_touch_lcd_2_8/
-        Modified: bsp_board.c, include/bsp/board.h, esp32_c5_touch_lcd_2.8.c (panel/touch rotation),
+        Modified: bsp_board.c, include/bsp/board.h, esp32_c5_touch_lcd_2.8.c (panel/touch rotation;
+        speaker-only audio), include/bsp/esp32_c5_touch_lcd_2.8.h,
         CMakeLists.txt, idf_component.yml
         (removed RTC/IMU/SHTC3 sensor and Wi-Fi support; README_ZH.md dropped)
     boards/c5_waveshare/components/waveshare__esp_lcd_touch_cst3530/

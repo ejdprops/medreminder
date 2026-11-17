@@ -102,7 +102,8 @@ esp_err_t bsp_audio_init_voice_24k(void);
 esp_err_t bsp_audio_deinit(void);
 /* Borrowed data interface; NULL before initialization. */
 const audio_codec_data_if_t *bsp_audio_get_codec_itf(void);
-/* Both functions return the same BSP-owned ES8311 IN_OUT codec, or NULL on failure. */
+/* BSP-owned ES8311 codec, speaker only (DAC, no I2S RX); NULL on failure.
+ * medreminder: the microphone function always returns NULL. */
 esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void);
 esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void);
 /* Raw PCM transfers: sizes/counts in bytes, timeout in ms. Caller owns the session. */

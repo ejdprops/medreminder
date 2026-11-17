@@ -8,6 +8,7 @@
 
 #include <esp_log.h>
 
+#include "audio.h"
 #include "fonts/fonts.h"
 #include "fw_version.h"
 #include "icons/icons.h"
@@ -116,6 +117,7 @@ static void back_cb(lv_event_t *e)
         s_refresh_timer = NULL;
     }
     lv_screen_load(s_return_to);
+    audio_play(AUDIO_CLICK);
     ESP_LOGI(TAG, "back");
 }
 
@@ -124,6 +126,7 @@ static void reveal_cb(lv_event_t *e)
     (void)e;
     s_code_revealed = true;
     update_code_visibility(true);
+    audio_play(AUDIO_CLICK);
     ESP_LOGI(TAG, "setup code revealed");
 }
 
@@ -136,6 +139,13 @@ static void brightness_cb(lv_event_t *e)
     if (lv_event_get_code(e) == LV_EVENT_RELEASED) {
         ESP_LOGI(TAG, "brightness %d%%", (int)v);
     }
+}
+
+/* Saved and previewed on release, so dragging doesn't write NVS or queue sounds */
+static void volume_cb(lv_event_t *e)
+{
+    audio_set_volume((int)lv_slider_get_value(lv_event_get_target_obj(e)));
+    audio_play(AUDIO_PREVIEW);
 }
 
 static lv_obj_t *slider(lv_obj_t *parent, int32_t y, int32_t min, int32_t max, int32_t value)
@@ -267,8 +277,8 @@ static void build(void)
     lv_obj_add_event_cb(b, brightness_cb, LV_EVENT_RELEASED, NULL);
 
     caption(s_screen, "ALERT VOLUME", 166, 160);
-    lv_obj_t *v = slider(s_screen, 182, 0, 100, 70);
-    lv_obj_add_state(v, LV_STATE_DISABLED); /* wired up with audio (7c) */
+    lv_obj_t *v = slider(s_screen, 182, 0, 100, audio_get_volume());
+    lv_obj_add_event_cb(v, volume_cb, LV_EVENT_RELEASED, NULL);
 
     lv_obj_t *ver = label(s_screen, fw_version_short(), &inter_8, 0x6b7280);
     lv_obj_align(ver, LV_ALIGN_BOTTOM_RIGHT, -8, -6);

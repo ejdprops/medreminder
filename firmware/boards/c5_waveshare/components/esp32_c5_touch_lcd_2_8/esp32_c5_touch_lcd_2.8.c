@@ -104,7 +104,8 @@ esp_err_t bsp_spi_bus_init(void)
  esp_err_t bsp_audio_init(const i2s_std_config_t *i2s_config)
 {
     esp_err_t ret = ESP_FAIL;
-    if (i2s_tx_chan && i2s_rx_chan) {
+    /* medreminder: speaker only. No RX channel, which saves its DMA buffers in internal RAM. */
+    if (i2s_tx_chan) {
         return ESP_OK;
     }
 
@@ -112,7 +113,7 @@ esp_err_t bsp_spi_bus_init(void)
     chan_cfg.auto_clear = true;
     chan_cfg.dma_desc_num = BSP_AUDIO_DMA_DESCRIPTORS;
     chan_cfg.dma_frame_num = BSP_AUDIO_DMA_FRAMES;
-    BSP_ERROR_CHECK_RETURN_ERR(i2s_new_channel(&chan_cfg, &i2s_tx_chan, &i2s_rx_chan));
+    BSP_ERROR_CHECK_RETURN_ERR(i2s_new_channel(&chan_cfg, &i2s_tx_chan, NULL));
 
     const i2s_std_config_t std_cfg_default = BSP_I2S_DUPLEX_MONO_CFG(22050);
     const i2s_std_config_t *p_i2s_cfg = &std_cfg_default;
@@ -154,12 +155,17 @@ esp_err_t bsp_audio_init_voice_24k(void)
 
 esp_err_t bsp_audio_deinit(void)
 {
+    /* medreminder: deleting an opened codec closes it, which already disables the TX channel */
+    bool tx_disabled = audio_codec != NULL;
     if (audio_codec) { esp_codec_dev_delete(audio_codec); audio_codec = NULL; }
     if (audio_codec_if) { audio_codec_delete_codec_if(audio_codec_if); audio_codec_if = NULL; }
     if (audio_ctrl_if) { audio_codec_delete_ctrl_if(audio_ctrl_if); audio_ctrl_if = NULL; }
     if (audio_gpio_if) { audio_codec_delete_gpio_if(audio_gpio_if); audio_gpio_if = NULL; }
     if (i2s_data_if) { audio_codec_delete_data_if(i2s_data_if); i2s_data_if = NULL; }
-    if (i2s_tx_chan) { i2s_channel_disable(i2s_tx_chan); i2s_del_channel(i2s_tx_chan); i2s_tx_chan = NULL; }
+    if (i2s_tx_chan) {
+        if (!tx_disabled) i2s_channel_disable(i2s_tx_chan);
+        i2s_del_channel(i2s_tx_chan); i2s_tx_chan = NULL;
+    }
     if (i2s_rx_chan) { i2s_channel_disable(i2s_rx_chan); i2s_del_channel(i2s_rx_chan); i2s_rx_chan = NULL; }
     return ESP_OK;
 }
@@ -221,7 +227,7 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
     es8311_codec_cfg_t es8311_cfg = {
         .ctrl_if = i2c_ctrl_if,
         .gpio_if = gpio_if,
-        .codec_mode = ESP_CODEC_DEV_WORK_MODE_BOTH,
+        .codec_mode = ESP_CODEC_DEV_WORK_MODE_DAC, /* medreminder: speaker only */
         .pa_pin = BSP_POWER_AMP_IO,
         .pa_reverted = false,
         .master_mode = false,
@@ -236,7 +242,7 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
     if (!es8311_dev) { bsp_audio_deinit(); return NULL; }
 
     esp_codec_dev_cfg_t codec_dev_cfg = {
-        .dev_type = ESP_CODEC_DEV_TYPE_IN_OUT,
+        .dev_type = ESP_CODEC_DEV_TYPE_OUT,
         .codec_if = es8311_dev,
         .data_if = i2s_data_if,
     };
@@ -247,7 +253,7 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
 
 esp_codec_dev_handle_t bsp_audio_codec_microphone_init(void)
 {
-    return bsp_audio_codec_speaker_init();
+    return NULL; /* medreminder: the codec is configured speaker-only */
 }
 
 

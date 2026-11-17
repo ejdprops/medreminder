@@ -1,7 +1,7 @@
 // Waveshare ESP32-C5-Touch-LCD-2.8: pins for the esp-matter device HAL.
 // Source: waveshareteam/ESP32-C5-Touch-LCD-2.8 BSP header.
-//   GPIO26 = I2S DOUT (MCU -> codec). No physical LED on this board; it is a
-//            safe placeholder for the light example's WS2812 output.
+//   No physical LED: esp_matter_device.cmake selects the no-op hollow_led driver, so the
+//            LED pin below is unused (GPIO26 is I2S DOUT to the codec; never drive it from RMT).
 //   GPIO27 = I2S DIN (codec -> MCU). Never drive this pin.
 //   GPIO28 = BOOT button, active low.
 #include <driver/gpio.h>
@@ -10,7 +10,7 @@
 led_driver_config_t led_driver_get_config()
 {
     led_driver_config_t config = {
-        .gpio = GPIO_NUM_26,
+        .gpio = GPIO_NUM_NC,
         .channel = 0,
     };
     return config;
