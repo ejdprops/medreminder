@@ -6,6 +6,7 @@
 
 #include <esp_log.h>
 
+#include "fonts/fonts.h"
 #include "icons/icons.h"
 
 static const char *TAG = "ui_home";
@@ -104,10 +105,9 @@ static void build_top_line(lv_obj_t *scr)
     lv_obj_set_pos(row, 0, 0);
     flex_center(row, LV_FLEX_FLOW_ROW, 8);
 
-    lv_obj_t *date = label(row, "WED 11 NOV", &lv_font_montserrat_12, 0x9ca3af);
-    lv_obj_set_style_text_letter_space(date, 1, 0);
-    dot(row, 3, 0x4b5563);
-    label(row, "3/5 taken", &lv_font_montserrat_12, 0xe5e7eb);
+    label(row, "WED 11 NOV", &inter_12_bold, 0x9ca3af);
+    label(row, "\u00b7", &inter_12_bold, 0x4b5563);
+    label(row, "3/5 taken", &inter_12_bold, 0xe5e7eb);
 
     lv_obj_t *bar = lv_bar_create(row);
     lv_obj_remove_style_all(bar);
@@ -139,20 +139,20 @@ static void build_pill(lv_obj_t *parent, const dose_t *d)
     lv_obj_set_flex_flow(pill, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(pill, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
-    lv_obj_t *name = label(pill, d->name, &lv_font_montserrat_10, c[1]);
+    lv_obj_t *name = label(pill, d->name, &inter_10_semibold, c[1]);
     lv_obj_set_flex_grow(name, 1);
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
 
     const char *slot = d->slot;
     char buf[24];
     if (d->state == DOSE_TAKEN) {
-        lv_snprintf(buf, sizeof(buf), "%s " LV_SYMBOL_OK, d->slot);
+        lv_snprintf(buf, sizeof(buf), "%s \u2713", d->slot);
         slot = buf;
     } else if (d->state == DOSE_NEXT) {
-        lv_snprintf(buf, sizeof(buf), "%s - next", d->slot);
+        lv_snprintf(buf, sizeof(buf), "%s \u00b7 next", d->slot);
         slot = buf;
     }
-    label(pill, slot, &lv_font_montserrat_8, c[2]);
+    label(pill, slot, &inter_9, c[2]);
 
     if (d->state == DOSE_OVERDUE) {
         lv_anim_t a;
@@ -179,7 +179,7 @@ static void build_dose_circle(lv_obj_t *scr)
     lv_obj_set_style_border_color(circle, lv_color_hex(0x1c1f26), 0);
     flex_center(circle, LV_FLEX_FLOW_COLUMN, 4);
 
-    lv_obj_t *when = label(circle, "TODAY  2:15 PM", &lv_font_montserrat_8, 0x6b7280);
+    lv_obj_t *when = label(circle, "TODAY \u00b7 2:15 PM", &inter_8, 0x6b7280);
     lv_obj_set_style_text_letter_space(when, 1, 0);
     for (size_t i = 0; i < sizeof(s_doses) / sizeof(s_doses[0]); i++) {
         build_pill(circle, &s_doses[i]);
@@ -203,7 +203,7 @@ static void build_tile(lv_obj_t *scr, const tile_t *t)
     lv_image_set_src(img, t->icon);
     lv_obj_set_style_image_recolor(img, lv_color_hex(t->icon_color), 0);
     lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
-    label(tile, t->state, &lv_font_montserrat_10, t->text_color);
+    label(tile, t->state, &inter_10_bold, t->text_color);
 }
 
 static void build_status_row(lv_obj_t *scr)
@@ -214,7 +214,7 @@ static void build_status_row(lv_obj_t *scr)
     flex_center(row, LV_FLEX_FLOW_ROW, 10);
 
     dot(row, 8, 0x22c55e);
-    label(row, "3 nodes synced", &lv_font_montserrat_12, 0x9ca3af);
+    label(row, "3 nodes synced", &inter_11_semibold, 0x9ca3af);
 
     lv_obj_t *gear = plain_obj(row);
     lv_obj_set_size(gear, 36, 36);

@@ -54,16 +54,34 @@ firmware/
 ├── CMakeLists.txt        reads BOARD (-DBOARD / env, default c5_waveshare); sets ESP_MATTER_DEVICE_PATH itself
 ├── build.sh
 ├── sdkconfig.defaults    common (from esp-matter light example)
-├── main/                 app code: still esp-matter's light example (placeholder Matter device)
-├── tools/serial_capture.py
+├── main/                 app_main.cpp (esp-matter light example, placeholder Matter device), ui.c
+│   │                     (display startup), ui_home.c (home screen), icons/ (generated A8 images)
+│   ├── icons/svg/        icon sources; regenerate with tools/svg_icons.py (see below)
+│   └── fonts/            generated Inter LVGL fonts (tools/gen_fonts.sh) + OFL license
+├── tools/serial_capture.py, tools/svg_icons.py, tools/gen_fonts.sh
+├── THIRD_PARTY_LICENSES  copied third-party code (Waveshare BSP, ...)
 └── boards/c5_waveshare/
     ├── target                     esp32c5
     ├── esp_matter_device.cmake    led_type ws2812, button_type iot
     ├── sdkconfig.defaults         32MB flash, PSRAM 80MHz, custom partitions, coredump to flash
     ├── sdkconfig.defaults.thread  Thread-only Matter config
     ├── partitions.csv
-    └── components/device/         pin map for esp-matter's LED/button HAL
+    └── components/
+        ├── device/                       pin map for esp-matter's LED/button HAL
+        ├── esp32_c5_touch_lcd_2_8/       Waveshare BSP (trimmed; panel/touch rotation added)
+        └── waveshare__esp_lcd_touch_cst3530/
 ```
+
+- UI startup: `ui_start()` (after `esp_matter::start`) spawns a one-shot `ui_init` task with an 8KB
+  PSRAM stack. `bsp_display_show()` renders the first frame on the calling task, which overflowed
+  main's 3.5KB stack (boot loop, "Stack protection fault" in task main). LVGL's own task stack is
+  in PSRAM too. UI code is guarded with `__has_include` so display-less boards still build.
+- Landscape: `ROTATE_90` with the USB port on the right. The LVGL adapter does not rotate SPI
+  panels; the BSP sets ST7789 swap/mirror and the matching CST3530 touch flags.
+- Icons: 24x24 stroke SVGs (from the design artboard) -> 20px A8 C arrays, colored with
+  `image_recolor`. Needs Pillow + svg.path in a throwaway venv (not the IDF env):
+  `python -m venv /tmp/v && /tmp/v/bin/pip install pillow svg.path &&
+  /tmp/v/bin/python tools/svg_icons.py --size 20 main/icons/svg/*.svg --out main/icons`.
 
 New board = new folder under `boards/` with the same files. Nothing in `~/esp/esp-matter` is modified
 for this project (an old `device_hal/device/waveshare_c5_lcd28/` there is a leftover; ignore it).
@@ -154,6 +172,13 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
     relies on XIP keeping cache on during flash writes), `SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY`,
     BLE shutdown after pairing.
   - **7b** main screen per design + settings page with Matter QR.
+    - 7b.1 (done) landscape 320x240, touch verified at all four corners.
+    - 7b.2 (done) home screen per artboard "Living room — C5 2.8in" with placeholder data
+      (`main/ui_home.c`); internal RAM unchanged (62.9KB idle, min 29.5KB).
+    - 7b.3 project fonts: Inter 4.1 (OFL) via `tools/gen_fonts.sh <Inter ttf dir>` (Node `npx
+      lv_font_conv@1.5.3`, Node from Homebrew) -> `main/fonts/` (committed). Sizes/weights from the
+      design: 8, 9 regular; 10, 11 semibold; 10, 12 bold. Glyphs: ASCII + "·" + "✓" only; add
+      ranges in the script for new characters. Built-in Montserrat: only LVGL's default 14 left.
   - **7c** overdue alert sound: ES8311 via Waveshare `bsp_extra` (`bsp_extra_i2s_write`), short WAV
     files in the `storage` partition, amp enabled via EXIO3. No MP3 decoder. Speaker 4–8Ω.
   - **7d** (later) background images from SD (JPEG via esp_new_jpeg into PSRAM; SD shares the LCD SPI
