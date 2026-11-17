@@ -347,6 +347,29 @@ lv_display_t *bsp_display_start_with_config(const bsp_display_cfg_t *cfg)
     if (!cfg || esp_lv_adapter_init(&cfg->lv_adapter_cfg) != ESP_OK) return NULL;
     bsp_display_config_t lcd = {0};
     if (bsp_display_new(&lcd, &panel_handle, &io_handle) != ESP_OK) goto failed;
+    // medreminder: the adapter does not rotate SPI panels; rotate in the ST7789 (MADCTL) and map
+    // touch to match. Touch flags apply in native portrait coordinates: mirror, then swap.
+    // ROTATE_90 verified on hardware (USB port on the right); 270 is its mirror image, 180 untested.
+    bsp_display_cfg_t rotated = *cfg;
+    switch (cfg->rotation) {
+    case ESP_LV_ADAPTER_ROTATE_90:
+        esp_lcd_panel_swap_xy(panel_handle, true);
+        esp_lcd_panel_mirror(panel_handle, true, false);
+        rotated.touch_flags.swap_xy = 1; rotated.touch_flags.mirror_x = 1; rotated.touch_flags.mirror_y = 0;
+        break;
+    case ESP_LV_ADAPTER_ROTATE_180:
+        esp_lcd_panel_mirror(panel_handle, true, true);
+        rotated.touch_flags.swap_xy = 0; rotated.touch_flags.mirror_x = 1; rotated.touch_flags.mirror_y = 1;
+        break;
+    case ESP_LV_ADAPTER_ROTATE_270:
+        esp_lcd_panel_swap_xy(panel_handle, true);
+        esp_lcd_panel_mirror(panel_handle, false, true);
+        rotated.touch_flags.swap_xy = 1; rotated.touch_flags.mirror_x = 0; rotated.touch_flags.mirror_y = 1;
+        break;
+    default:
+        break;
+    }
+    cfg = &rotated;
     const esp_lv_adapter_display_config_t display = {
         .panel = panel_handle, .panel_io = io_handle,
         .profile = {
@@ -363,7 +386,8 @@ lv_display_t *bsp_display_start_with_config(const bsp_display_cfg_t *cfg)
     const esp_lv_adapter_touch_config_t touch = ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(disp_drv, tp);
     disp_indev = esp_lv_adapter_register_touch(&touch);
     if (!disp_indev || esp_lv_adapter_start() != ESP_OK) goto failed;
-    ESP_LOGI(TAG, "ST7789 240x320; CST3530; LVGL adapter; 2 x 9600-byte internal DMA buffers");
+    ESP_LOGI(TAG, "ST7789 %dx%d (rotation %d); CST3530; LVGL adapter; 2 x 9600-byte internal DMA buffers",
+             (int)lv_display_get_horizontal_resolution(disp_drv), (int)lv_display_get_vertical_resolution(disp_drv), (int)cfg->rotation);
     return disp_drv;
 failed:
     // Do not expose a partially registered display as a successful retry.

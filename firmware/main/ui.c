@@ -33,13 +33,13 @@ static void build_static_screen(void)
     lv_label_set_text(title, "MedReminder");
     lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(title, lv_color_white(), 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 20);
 
     lv_obj_t *sub = lv_label_create(scr);
-    lv_label_set_text(sub, "Display test (7a)\nMatter running");
+    lv_label_set_text(sub, "Landscape test (7b.1)\nMatter running");
     lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_style_text_color(sub, lv_color_hex(0x9AA5B1), 0);
-    lv_obj_align(sub, LV_ALIGN_TOP_MID, 0, 90);
+    lv_obj_align(sub, LV_ALIGN_TOP_MID, 0, 60);
 
     /* Color bars: check RGB order / inversion at a glance (red, green, blue, left to right) */
     static const uint32_t bars[] = {0xE53935, 0x43A047, 0x1E88E5};
@@ -56,7 +56,7 @@ static void build_static_screen(void)
     s_touch_label = lv_label_create(scr);
     lv_label_set_text(s_touch_label, "touch the screen");
     lv_obj_set_style_text_color(s_touch_label, lv_color_hex(0xFFB300), 0);
-    lv_obj_align(s_touch_label, LV_ALIGN_BOTTOM_MID, 0, -30);
+    lv_obj_align(s_touch_label, LV_ALIGN_BOTTOM_MID, 0, -12);
 
     s_touch_dot = lv_obj_create(scr);
     lv_obj_remove_style_all(s_touch_dot);
@@ -73,7 +73,7 @@ void ui_start(void)
     /* LVGL task stack in PSRAM: internal RAM is reserved for Matter and the SPI DMA buffers */
     bsp_display_cfg_t cfg = {
         .lv_adapter_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG(),
-        .rotation = ESP_LV_ADAPTER_ROTATE_0,
+        .rotation = ESP_LV_ADAPTER_ROTATE_90, /* landscape 320x240 */
         .tear_avoid_mode = ESP_LV_ADAPTER_TEAR_AVOID_MODE_NONE,
     };
     cfg.lv_adapter_cfg.stack_in_psram = true;
