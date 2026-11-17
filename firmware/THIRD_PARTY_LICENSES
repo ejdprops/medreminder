@@ -1,0 +1,16 @@
+Third-party code copied into this repository
+============================================
+
+Waveshare ESP32-C5-Touch-LCD-2.8 BSP
+  Source:  https://github.com/ejdprops/ESP32-C5-Touch-LCD-2.8 (fork of Waveshare's repo),
+           examples/esp-idf/01_lvgl_demo/components/
+  License: Apache-2.0 (full text: boards/c5_waveshare/components/esp32_c5_touch_lcd_2_8/LICENSE)
+  Files:
+    boards/c5_waveshare/components/esp32_c5_touch_lcd_2_8/
+        Modified: bsp_board.c, include/bsp/board.h, CMakeLists.txt, idf_component.yml
+        (removed RTC/IMU/SHTC3 sensor and Wi-Fi support; README_ZH.md dropped)
+    boards/c5_waveshare/components/waveshare__esp_lcd_touch_cst3530/
+        Unmodified (test_apps dropped). Apache-2.0; copyright holders in the file headers.
+
+Registry components (lvgl, esp_lvgl_adapter, custom_io_expander_ch32v003, esp_codec_dev, ...)
+are fetched by the ESP component manager into managed_components/ and are not copied here.

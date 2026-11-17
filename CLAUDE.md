@@ -126,11 +126,19 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
   ≥44px). Gear opens Settings: Matter setup QR + manual code (generate from esp-matter onboarding
   codes, show until paired), pairing status, alert volume, brightness.
 - Roadmap:
-  - **7a** add Waveshare BSP (display, touch, CH32V003 expander) and show a static screen while
-    Matter runs. Riskiest step: internal RAM is ~173KB free with Matter; LVGL/SPI DMA and I2S need
-    internal buffers. Adopt Waveshare's PSRAM settings (`SPIRAM_FETCH_INSTRUCTIONS`,
-    `SPIRAM_RODATA`, `SPIRAM_XIP_FROM_PSRAM`) to free RAM and keep the display alive during flash
-    writes. Measure free internal heap at each step.
+  - **7a** (done) Waveshare BSP (display, touch, CH32V003 expander) in
+    `boards/c5_waveshare/components/` (sensors/Wi-Fi stripped), static test screen from
+    `main/ui.c`, portrait. PSRAM settings: XIP from PSRAM + `SPIRAM_MALLOC_ALWAYSINTERNAL=0`;
+    LVGL task stack in PSRAM. `app_main` logs `heap[...]` every 10 s; internal RAM figures:
+    | State | Free idle | Min ever |
+    |---|---|---|
+    | Matter only, defaults | 102.6KB | 63KB |
+    | + PSRAM settings | 104.7KB | 72.5KB |
+    | + display/touch/LVGL | 61.6KB | 29.3KB (during display init) |
+    BSP costs ~12.5KB static IRAM/DRAM + 2×9.6KB internal DMA draw buffers. Not yet measured:
+    commissioning with the display running. Spare levers: SPI ISR / ringbuf out of IRAM (~9KB,
+    relies on XIP keeping cache on during flash writes), `SPIRAM_ALLOW_STACK_EXTERNAL_MEMORY`,
+    BLE shutdown after pairing.
   - **7b** main screen per design + settings page with Matter QR.
   - **7c** overdue alert sound: ES8311 via Waveshare `bsp_extra` (`bsp_extra_i2s_write`), short WAV
     files in the `storage` partition, amp enabled via EXIO3. No MP3 decoder. Speaker 4–8Ω.
