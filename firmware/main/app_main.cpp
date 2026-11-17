@@ -267,7 +267,6 @@ extern "C" void app_main()
     app_driver_light_set_defaults(light_endpoint_id);
 
     ui_start();
-    log_heap("ui started");
 
 #if CONFIG_ENABLE_ENCRYPTED_OTA
     err = esp_matter_ota_requestor_encrypted_init(s_decryption_key, s_decryption_key_len);
