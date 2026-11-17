@@ -13,6 +13,7 @@
 #include "fw_version.h"
 #include "icons/icons.h"
 #include "matter_info.h"
+#include "ui_tap.h"
 
 #if __has_include("bsp/esp-bsp.h")
 #include "bsp/esp-bsp.h"
@@ -109,9 +110,10 @@ static void refresh_timer_cb(lv_timer_t *t)
     refresh_status();
 }
 
-static void back_cb(lv_event_t *e)
+static void back_cb(lv_obj_t *obj, void *user_data)
 {
-    (void)e;
+    (void)obj;
+    (void)user_data;
     if (s_refresh_timer) {
         lv_timer_delete(s_refresh_timer);
         s_refresh_timer = NULL;
@@ -121,9 +123,10 @@ static void back_cb(lv_event_t *e)
     ESP_LOGI(TAG, "back");
 }
 
-static void reveal_cb(lv_event_t *e)
+static void reveal_cb(lv_obj_t *obj, void *user_data)
 {
-    (void)e;
+    (void)obj;
+    (void)user_data;
     s_code_revealed = true;
     update_code_visibility(true);
     audio_play(AUDIO_CLICK);
@@ -208,7 +211,7 @@ static void build_paired_card(lv_obj_t *scr)
     lv_obj_set_style_border_color(btn, lv_color_hex(0x2e333d), 0);
     lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(btn, 7); /* 44px tall touch target */
-    lv_obj_add_event_cb(btn, reveal_cb, LV_EVENT_CLICKED, NULL);
+    ui_on_tap(btn, reveal_cb, NULL);
     lv_obj_t *t = label(btn, "Show setup code", &inter_10_semibold, 0xd1d5db);
     lv_obj_center(t);
 }
@@ -232,7 +235,7 @@ static void build(void)
     lv_obj_set_style_border_color(back, lv_color_hex(0x2e333d), 0);
     lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(back, 4);
-    lv_obj_add_event_cb(back, back_cb, LV_EVENT_CLICKED, NULL);
+    ui_on_tap(back, back_cb, NULL);
     lv_obj_t *chev = lv_image_create(back);
     lv_image_set_src(chev, &icon_chevron_left);
     lv_obj_set_style_image_recolor(chev, lv_color_hex(0xd1d5db), 0);

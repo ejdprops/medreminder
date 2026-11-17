@@ -53,9 +53,10 @@ python tools/serial_capture.py --seconds 60 --reset --out /tmp/boot.log   # read
   `PROJECT_VER_NUMBER` (integer Matter SoftwareVersion; must increase every release, OTA compares
   it). Bump both together. Releases are tagged `fw-v<PROJECT_VER>`.
 - Every build runs `tools/build_info.cmake` -> `build_info.h` with `git describe --tags --match
-  "fw-v*" --dirty`. Screens (home and settings, bottom-right) show `v0.2.0` only when built exactly
-  at the tag with a clean tree, otherwise `v0.2.0-dev`. The boot log prints the full describe
-  string and SoftwareVersion: `firmware v0.2.0-dev (fw-v0.2.0-3-gabc1234-dirty), ...`.
+  "fw-v*" --dirty`. Screens (home bottom-center, settings bottom-right) show `v0.3.0` when built
+  exactly at the tag with a clean tree; past it, commits since the tag and `*` for uncommitted
+  changes (`v0.3.0-2*`); `v0.3.0-dev` if the latest tag isn't this PROJECT_VER. The boot log prints
+  the full describe string and SoftwareVersion: `firmware v0.3.0-2* (fw-v0.3.0-2-gabc1234-dirty), ...`.
 - Release: bump both values, commit, `git tag -a fw-vX.Y.Z -m "..."`, `git push && git push origin
   fw-vX.Y.Z`, then build and flash from the clean tagged tree. Version bumps change a Matter GN
   arg, so that build is slower; NVS (pairing) is kept.
@@ -166,12 +167,16 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
 - Design: claude.ai artifact "MedReminder Round Display UI", artboard
   **"C5 2.8in rectangular"** (renamed from "Living room — C5 2.8in": the device may move rooms and
   more units may go elsewhere, so artboard and code names are location-neutral). Landscape 320×240:
-  top line date + live time ("MON 16 NOV · 8:58 PM"); five equal 148×50 dose pills (taken green,
-  next amber, later blue, overdue red pulsing), one per corner and one in the center. Center = next
-  dose; the rest follow the day clockwise: UL taken two ago, UR most recently taken, LR after next,
-  LL after that; taking a dose rotates all pills one step. No corner tiles (the old package/garage/
-  lights/door tiles were removed; icons are in git history). Bottom-center node-sync status +
-  **settings gear** (36px drawn, 44px touch area), version bottom-right. Center layout is per board:
+  top line date + live time, 16px bold ("MON 16 NOV · 8:58 PM"). Dose pills (taken green, next
+  amber, later blue, overdue red pulsing), text centered: the next dose large in the center
+  (153×58 at 83,86; 23/16px; tap marks it taken), the other four small around it (89×33 at
+  x 19/212, y 37/160; 12/9px), following the day clockwise: UL taken two ago, UR most recently
+  taken, LR after next, LL after that; taking a dose rotates all pills one step. No corner tiles
+  (the old package/garage/lights/door tiles were removed; icons are in git history). Bottom:
+  node-sync status centered with a faint green (synced) / red outline instead of a dot, version
+  centered below it, **settings gear** far right (36px drawn, 44px touch area), dev reset button
+  far left (Kconfig `MEDREMINDER_DEV_TOOLS`, default on; turn off for release builds). Taps count
+  only when held >= 100ms (`main/ui_tap.c`, `UI_TAP_MIN_MS`). Center layout is per board:
   Kconfig `MEDREMINDER_UI_LAYOUT` RECT (C5) or ROUND (old circle layout, for round displays).
   Gear opens Settings: Matter setup QR + manual code (generate from esp-matter onboarding
   codes, show until paired), pairing status, alert volume, brightness.
@@ -195,7 +200,7 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
       (`main/ui_home.c`); internal RAM unchanged (62.9KB idle, min 29.5KB).
     - 7b.3 (done) project fonts: Inter 4.1 (OFL) via `tools/gen_fonts.sh <Inter ttf dir>` (Node `npx
       lv_font_conv@1.5.3`, Node from Homebrew) -> `main/fonts/` (committed). Sizes/weights from the
-      design: 8, 9 regular; 10, 11, 14, 20 semibold; 12 bold. Glyphs: ASCII + "·" + "✓" only; add
+      design: 8, 9 regular; 9, 10, 11, 12, 16, 23 semibold; 12, 16 bold. Glyphs: ASCII + "·" + "✓" only; add
       ranges in the script for new characters. Built-in Montserrat: only LVGL's default 14 left.
     - 7b.4 (done) settings page (`main/ui_settings.c`): Matter QR + manual code generated on the
       device (`main/matter_info.cpp`, takes the CHIP stack lock), hidden behind "Show setup code"
@@ -207,6 +212,9 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
       (POSIX, default US Central `CST6CDT,M3.2.0,M11.1.0`), `MEDREMINDER_NTP_SERVER`
       (`pool.ntp.org`). Costs ~2.5KB internal RAM (60.2KB idle, min 27.7KB).
     - 7b.6 (done) five-pill home screen (above), replacing the circle + corner tiles on the C5.
+    - 7b.7 (done, v0.3.0) big center pill / small surrounding pills, centered text, 100ms tap
+      minimum, single decaying click (a held tone with hard edges sounded like a double tick),
+      dev reset button, bottom row rework, version label with commit count.
   - **7c** overdue alert sound: ES8311 via the BSP, short WAV files in the `storage` partition, amp
     enabled via EXIO3. No MP3 decoder. Speaker 4–8Ω (connected).
     - 7c.1 (done) `main/audio.c`: queue-fed audio task, `audio_play(AUDIO_CLICK | AUDIO_PREVIEW)`,

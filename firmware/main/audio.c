@@ -46,6 +46,21 @@ static void play_tone(float freq, int ms, float amp, int fade_ms)
     }
 }
 
+/* One tick: 1ms attack, then exponential decay (time constant 4ms) over 25ms. A held tone with
+ * hard edges sounded like two ticks (onset and cutoff). */
+static void play_click(void)
+{
+    int16_t buf[400];
+    const int total = SAMPLE_RATE * 25 / 1000;
+    const int attack = SAMPLE_RATE / 1000;
+    for (int k = 0; k < total; k++) {
+        float t = (float)k / SAMPLE_RATE;
+        float env = k < attack ? (float)k / attack : expf(-(t - 0.001f) / 0.004f);
+        buf[k] = (int16_t)(sinf(2.0f * (float)M_PI * 2000.0f * t) * env * 26000.0f);
+    }
+    esp_codec_dev_write(s_codec, buf, total * sizeof(int16_t));
+}
+
 static void silence(int ms)
 {
     int16_t buf[256] = {0};
@@ -103,7 +118,7 @@ static void play(audio_sound_t sound)
     ESP_LOGI(TAG, "play %s at volume %d", sound == AUDIO_CLICK ? "click" : "preview", s_volume);
     switch (sound) {
     case AUDIO_CLICK:
-        play_tone(1800.0f, 30, 1.0f, 3);
+        play_click();
         break;
     case AUDIO_PREVIEW:
         play_tone(880.0f, 150, 1.0f, 5);

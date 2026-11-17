@@ -3,4 +3,5 @@
 #include "lvgl.h"
 
 LV_IMAGE_DECLARE(icon_chevron_left);
+LV_IMAGE_DECLARE(icon_reset);
 LV_IMAGE_DECLARE(icon_settings);

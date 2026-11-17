@@ -4,9 +4,12 @@
 
 LV_FONT_DECLARE(inter_8);
 LV_FONT_DECLARE(inter_9);
+LV_FONT_DECLARE(inter_9_semibold);
 LV_FONT_DECLARE(inter_10_semibold);
 LV_FONT_DECLARE(inter_11_semibold);
+LV_FONT_DECLARE(inter_12_semibold);
 LV_FONT_DECLARE(inter_12_bold);
-LV_FONT_DECLARE(inter_14_semibold);
-LV_FONT_DECLARE(inter_20_semibold);
+LV_FONT_DECLARE(inter_16_semibold);
+LV_FONT_DECLARE(inter_16_bold);
+LV_FONT_DECLARE(inter_23_semibold);
 

@@ -1,8 +1,9 @@
-/* Home screen, 320x240 landscape. Date + time on top, node status + settings gear (and the firmware
- * version, bottom-right) at the bottom. Doses per CONFIG_MEDREMINDER_UI_LAYOUT:
- *   RECT (C5 board): five equal 148x50 pills, one per corner and one in the center. The center is
- *     the next dose; the rest follow the day clockwise: UL = taken two ago, UR = most recently
- *     taken, LR = after next, LL = after that. Taking a dose rotates every pill one step.
+/* Home screen, 320x240 landscape. Date + time on top; at the bottom node sync status and the
+ * firmware version centered, settings gear right, dev reset button left. Doses per
+ * CONFIG_MEDREMINDER_UI_LAYOUT:
+ *   RECT (C5 board): the next dose large in the center (tap to mark taken), four small pills around
+ *     it following the day clockwise: UL = taken two ago, UR = most recently taken, LR = after
+ *     next, LL = after that. Taking a dose rotates every pill one step.
  *   ROUND: date + progress on top and the day's pills listed in a 168px circle. */
 #if __has_include("lvgl.h") /* boards without a display build no UI */
 #include "ui_home.h"
@@ -17,6 +18,7 @@
 #include "fw_version.h"
 #include "icons/icons.h"
 #include "time_sync.h"
+#include "ui_tap.h"
 #include "ui_settings.h"
 
 static const char *TAG = "ui_home";
@@ -34,7 +36,8 @@ typedef struct {
     dose_state_t state;
 } dose_t;
 
-/* Placeholder data, in daily order. Tapping the next dose marks it taken (resets on reboot). */
+/* Placeholder data, in daily order. Tapping the next dose marks it taken (resets on reboot and with
+ * the dev reset button). */
 static dose_t s_doses[] = {
     {"Evan", "AM", DOSE_TAKEN},
     {"Karen", "AM", DOSE_TAKEN},
@@ -43,6 +46,7 @@ static dose_t s_doses[] = {
     {"Karen", "BED", DOSE_LATER},
 };
 #define DOSE_COUNT ((int)(sizeof(s_doses) / sizeof(s_doses[0])))
+static dose_state_t s_initial_states[DOSE_COUNT];
 
 /* bg, name text, slot text per dose_state_t */
 static const uint32_t s_pill_colors[][3] = {
@@ -76,18 +80,10 @@ static void flex_center(lv_obj_t *o, lv_flex_flow_t flow, int32_t gap)
     lv_obj_set_style_pad_gap(o, gap, 0);
 }
 
-static void dot(lv_obj_t *parent, int32_t size, uint32_t color)
+static void settings_cb(lv_obj_t *obj, void *user_data)
 {
-    lv_obj_t *d = plain_obj(parent);
-    lv_obj_set_size(d, size, size);
-    lv_obj_set_style_radius(d, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_opa(d, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(d, lv_color_hex(color), 0);
-}
-
-static void settings_cb(lv_event_t *e)
-{
-    (void)e;
+    (void)obj;
+    (void)user_data;
     ESP_LOGI(TAG, "settings tap");
     ui_settings_open();
     audio_play(AUDIO_CLICK);
@@ -100,10 +96,15 @@ static void build_top_line(lv_obj_t *scr)
     lv_obj_set_pos(row, 0, 0);
     flex_center(row, LV_FLEX_FLOW_ROW, 8);
 
-    s_date_label = label(row, "--- -- ---", &inter_12_bold, 0x9ca3af);
-    label(row, "·", &inter_12_bold, 0x4b5563);
 #if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
-    s_time_label = label(row, "--:--", &inter_12_bold, 0xe5e7eb);
+    const lv_font_t *top_font = &inter_16_bold;
+#else
+    const lv_font_t *top_font = &inter_12_bold;
+#endif
+    s_date_label = label(row, "--- -- ---", top_font, 0x9ca3af);
+    label(row, "\u00b7", top_font, 0x4b5563);
+#if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
+    s_time_label = label(row, "--:--", top_font, 0xe5e7eb);
 #else
     label(row, "3/5 taken", &inter_12_bold, 0xe5e7eb);
 
@@ -171,9 +172,10 @@ static void rebuild_doses(void *arg)
     s_last_minute = -1; /* the round layout's time label was recreated */
 }
 
-static void take_cb(lv_event_t *e)
+static void take_cb(lv_obj_t *obj, void *user_data)
 {
-    dose_t *d = lv_event_get_user_data(e);
+    (void)obj;
+    dose_t *d = user_data;
     if (d->state == DOSE_TAKEN) {
         return;
     }
@@ -186,44 +188,48 @@ static void take_cb(lv_event_t *e)
 /* The next dose's pill marks it taken on tap */
 static void make_takeable(lv_obj_t *pill, dose_t *d)
 {
-    lv_obj_add_flag(pill, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_style_bg_color(pill, lv_color_lighten(lv_color_hex(s_pill_colors[d->state][0]), LV_OPA_20),
                               LV_STATE_PRESSED);
-    lv_obj_add_event_cb(pill, take_cb, LV_EVENT_CLICKED, d);
+    ui_on_tap(pill, take_cb, d);
 }
 
 #if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
-/* Two columns of 148 (8px margins and gap) and three rows of 50 (8px gaps) fill the 320x166 area
- * between the top line (y 0-30) and the status row (y 200-240). */
-#define PILL_W 148
-#define PILL_H 50
+/* Next dose large in the center (153x58); the others small (89x33) around it, between the top
+ * line (y 0-30) and the status row (y 200-240). */
+typedef struct {
+    int32_t w, h;
+    const lv_font_t *name_font, *slot_font;
+} pill_size_t;
+
+static const pill_size_t s_center_size = {153, 58, &inter_23_semibold, &inter_16_semibold};
+static const pill_size_t s_corner_size = {89, 33, &inter_12_semibold, &inter_9_semibold};
 
 /* Pill position by offset from the next dose (-2..+2), clockwise from upper left */
 static const struct {
     int offset;
     int32_t x, y;
 } s_positions[] = {
-    {0, 86, 90},    /* center: next */
-    {-1, 164, 32},  /* upper right: most recently taken */
-    {1, 164, 148},  /* lower right: after next */
-    {2, 8, 148},    /* lower left */
-    {-2, 8, 32},    /* upper left: taken two ago */
+    {0, 83, 86},    /* center: next */
+    {-1, 212, 37},  /* upper right: most recently taken */
+    {1, 212, 160},  /* lower right: after next */
+    {2, 19, 160},   /* lower left */
+    {-2, 19, 37},   /* upper left: taken two ago */
 };
 
-static lv_obj_t *build_pill(lv_obj_t *area, const dose_t *d, int32_t x, int32_t y)
+static lv_obj_t *build_pill(lv_obj_t *area, const dose_t *d, const pill_size_t *sz, int32_t x, int32_t y)
 {
     const uint32_t *c = s_pill_colors[d->state];
-    lv_obj_t *pill = pill_base(area, d, PILL_W, PILL_H);
+    lv_obj_t *pill = pill_base(area, d, sz->w, sz->h);
     lv_obj_set_pos(pill, x, y);
-    lv_obj_set_style_pad_hor(pill, 18, 0);
-    lv_obj_set_flex_flow(pill, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(pill, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_hor(pill, sz->h / 3, 0);
+    flex_center(pill, LV_FLEX_FLOW_COLUMN, 0);
 
-    lv_obj_t *name = label(pill, d->name, &inter_20_semibold, c[1]);
+    lv_obj_t *name = label(pill, d->name, sz->name_font, c[1]);
     lv_obj_set_width(name, LV_PCT(100));
+    lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     char buf[24];
-    label(pill, slot_text(d, buf, sizeof(buf)), &inter_14_semibold, c[2]);
+    label(pill, slot_text(d, buf, sizeof(buf)), sz->slot_font, c[2]);
     return pill;
 }
 
@@ -240,8 +246,10 @@ static void build_doses(lv_obj_t *area)
     /* Fill center, then the nearest offsets, so fewer than five doses never repeat a pill */
     for (int p = 0; p < (int)(sizeof(s_positions) / sizeof(s_positions[0])) && p < DOSE_COUNT; p++) {
         int i = ((next + s_positions[p].offset) % DOSE_COUNT + DOSE_COUNT) % DOSE_COUNT;
-        lv_obj_t *pill = build_pill(area, &s_doses[i], s_positions[p].x, s_positions[p].y);
-        if (s_positions[p].offset == 0) {
+        bool center = s_positions[p].offset == 0;
+        lv_obj_t *pill = build_pill(area, &s_doses[i], center ? &s_center_size : &s_corner_size,
+                                    s_positions[p].x, s_positions[p].y);
+        if (center) {
             make_takeable(pill, &s_doses[i]);
         }
     }
@@ -282,18 +290,33 @@ static void build_doses(lv_obj_t *area)
 }
 #endif
 
-static void build_status_row(lv_obj_t *scr)
+/* Placeholder until node sync is real */
+static const bool s_nodes_synced = true;
+
+/* Bottom: node sync status centered (faint green/red outline instead of a dot), version centered
+ * below it, settings gear far right (dev reset button far left). */
+static void build_bottom_row(lv_obj_t *scr)
 {
-    lv_obj_t *row = plain_obj(scr);
-    lv_obj_set_size(row, 320, 40);
-    lv_obj_set_pos(row, 0, 200);
-    flex_center(row, LV_FLEX_FLOW_ROW, 10);
+    uint32_t tint = s_nodes_synced ? 0x22c55e : 0xef4444;
+    lv_obj_t *status = plain_obj(scr);
+    lv_obj_set_size(status, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_hor(status, 10, 0);
+    lv_obj_set_style_pad_ver(status, 3, 0);
+    lv_obj_set_style_radius(status, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(status, LV_OPA_10, 0);
+    lv_obj_set_style_bg_color(status, lv_color_hex(tint), 0);
+    lv_obj_set_style_border_width(status, 1, 0);
+    lv_obj_set_style_border_opa(status, LV_OPA_40, 0);
+    lv_obj_set_style_border_color(status, lv_color_hex(tint), 0);
+    label(status, s_nodes_synced ? "3 nodes synced" : "Nodes not synced", &inter_11_semibold, 0x9ca3af);
+    lv_obj_align(status, LV_ALIGN_BOTTOM_MID, 0, -18);
 
-    dot(row, 8, 0x22c55e);
-    label(row, "3 nodes synced", &inter_11_semibold, 0x9ca3af);
+    lv_obj_t *ver = label(scr, fw_version_short(), &inter_8, 0x6b7280);
+    lv_obj_align(ver, LV_ALIGN_BOTTOM_MID, 0, -4);
 
-    lv_obj_t *gear = plain_obj(row);
+    lv_obj_t *gear = plain_obj(scr);
     lv_obj_set_size(gear, 36, 36);
+    lv_obj_set_pos(gear, 276, 202);
     lv_obj_set_style_radius(gear, 10, 0);
     lv_obj_set_style_bg_opa(gear, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(gear, lv_color_hex(0x171920), 0);
@@ -301,15 +324,55 @@ static void build_status_row(lv_obj_t *scr)
     lv_obj_set_style_border_width(gear, 1, 0);
     lv_obj_set_style_border_color(gear, lv_color_hex(0x2e333d), 0);
     flex_center(gear, LV_FLEX_FLOW_COLUMN, 0);
-    lv_obj_add_flag(gear, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(gear, 4); /* 36px drawn, 44px touch target */
-    lv_obj_add_event_cb(gear, settings_cb, LV_EVENT_CLICKED, NULL);
+    ui_on_tap(gear, settings_cb, NULL);
 
     lv_obj_t *img = lv_image_create(gear);
     lv_image_set_src(img, &icon_settings);
     lv_obj_set_style_image_recolor(img, lv_color_hex(0xd1d5db), 0);
     lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
 }
+
+#if CONFIG_MEDREMINDER_DEV_TOOLS
+/* Dev: put the doses back to their boot states */
+static void reset_cb(lv_obj_t *obj, void *user_data)
+{
+    (void)obj;
+    (void)user_data;
+    bool changed = false;
+    for (int i = 0; i < DOSE_COUNT; i++) {
+        changed |= s_doses[i].state != s_initial_states[i];
+        s_doses[i].state = s_initial_states[i];
+    }
+    if (!changed) {
+        return;
+    }
+    ESP_LOGI(TAG, "dev: dose states reset");
+    audio_play(AUDIO_CLICK);
+    rebuild_doses(NULL);
+}
+
+static void build_reset_button(lv_obj_t *scr)
+{
+    lv_obj_t *btn = plain_obj(scr);
+    lv_obj_set_size(btn, 36, 36);
+    lv_obj_set_pos(btn, 8, 202);
+    lv_obj_set_style_radius(btn, 10, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x171920), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a2e38), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(0x7c2d12), 0); /* dev-only: orange edge */
+    flex_center(btn, LV_FLEX_FLOW_COLUMN, 0);
+    lv_obj_set_ext_click_area(btn, 4);
+    ui_on_tap(btn, reset_cb, NULL);
+
+    lv_obj_t *img = lv_image_create(btn);
+    lv_image_set_src(img, &icon_reset);
+    lv_obj_set_style_image_recolor(img, lv_color_hex(0xfdba74), 0);
+    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
+}
+#endif
 
 /* Date and time labels from the system clock; dashes until the first SNTP sync. */
 static void clock_timer_cb(lv_timer_t *t)
@@ -345,15 +408,18 @@ void ui_home_create(lv_obj_t *scr)
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x0b0c0f), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
+    for (int i = 0; i < DOSE_COUNT; i++) {
+        s_initial_states[i] = s_doses[i].state;
+    }
     build_top_line(scr);
     /* Transparent, non-clickable area in screen coordinates, so pill positions stay absolute */
     s_dose_area = plain_obj(scr);
     lv_obj_set_size(s_dose_area, 320, 200);
     build_doses(s_dose_area);
-    build_status_row(scr);
-
-    lv_obj_t *ver = label(scr, fw_version_short(), &inter_8, 0x6b7280);
-    lv_obj_align(ver, LV_ALIGN_BOTTOM_RIGHT, -8, -6);
+    build_bottom_row(scr);
+#if CONFIG_MEDREMINDER_DEV_TOOLS
+    build_reset_button(scr);
+#endif
 
     lv_timer_create(clock_timer_cb, 1000, NULL);
     clock_timer_cb(NULL);

@@ -29,6 +29,13 @@ menu "MedReminder"
             bool "Round: pills in a 168px circle with a TODAY/time header"
     endchoice
 
+    config MEDREMINDER_DEV_TOOLS
+        bool "Developer tools on the home screen"
+        default y
+        help
+            Adds a bottom-left button that resets the dose states, for testing. Turn off for
+            release builds.
+
     config MEDREMINDER_NTP_SERVER
         string "NTP server"
         default "pool.ntp.org"

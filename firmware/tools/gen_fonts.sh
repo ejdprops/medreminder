@@ -14,11 +14,14 @@ mkdir -p "$OUT"
 FONTS=(
     "8 Regular inter_8"
     "9 Regular inter_9"
+    "9 SemiBold inter_9_semibold"
     "10 SemiBold inter_10_semibold"
     "11 SemiBold inter_11_semibold"
+    "12 SemiBold inter_12_semibold"
     "12 Bold inter_12_bold"
-    "14 SemiBold inter_14_semibold"
-    "20 SemiBold inter_20_semibold"
+    "16 SemiBold inter_16_semibold"
+    "16 Bold inter_16_bold"
+    "23 SemiBold inter_23_semibold"
 )
 
 decls=""
