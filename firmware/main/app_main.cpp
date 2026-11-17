@@ -20,6 +20,7 @@
 
 #include <app_priv.h>
 #include <ui.h>
+#include <fw_version.h>
 #include <app_reset.h>
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #include <platform/ESP32/OpenthreadLauncher.h>
@@ -181,6 +182,9 @@ static esp_err_t app_attribute_update_cb(attribute::callback_type_t type, uint16
 extern "C" void app_main()
 {
     esp_err_t err = ESP_OK;
+
+    ESP_LOGI(TAG, "firmware %s (%s), Matter SoftwareVersion %u", fw_version_short(), fw_version_git(),
+             fw_version_number());
 
     /* Initialize the ESP NVS layer */
     nvs_flash_init();

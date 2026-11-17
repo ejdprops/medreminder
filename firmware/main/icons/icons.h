@@ -3,6 +3,7 @@
 #include "lvgl.h"
 
 LV_IMAGE_DECLARE(icon_bulb);
+LV_IMAGE_DECLARE(icon_chevron_left);
 LV_IMAGE_DECLARE(icon_garage);
 LV_IMAGE_DECLARE(icon_lock);
 LV_IMAGE_DECLARE(icon_package);

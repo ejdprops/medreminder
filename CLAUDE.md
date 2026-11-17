@@ -47,6 +47,19 @@ python tools/serial_capture.py --seconds 60 --reset --out /tmp/boot.log   # read
   it spins redrawing the prompt, starves the CPU and breaks commissioning (tested).
 - First Matter build is ~15-25 min; incremental builds are fast.
 
+## Firmware versions
+
+- `firmware/CMakeLists.txt`: `PROJECT_VER` (semver, Matter SoftwareVersionString) and
+  `PROJECT_VER_NUMBER` (integer Matter SoftwareVersion; must increase every release, OTA compares
+  it). Bump both together. Releases are tagged `fw-v<PROJECT_VER>`.
+- Every build runs `tools/build_info.cmake` -> `build_info.h` with `git describe --tags --match
+  "fw-v*" --dirty`. Screens (home and settings, bottom-right) show `v0.2.0` only when built exactly
+  at the tag with a clean tree, otherwise `v0.2.0-dev`. The boot log prints the full describe
+  string and SoftwareVersion: `firmware v0.2.0-dev (fw-v0.2.0-3-gabc1234-dirty), ...`.
+- Release: bump both values, commit, `git tag -a fw-vX.Y.Z -m "..."`, `git push && git push origin
+  fw-vX.Y.Z`, then build and flash from the clean tagged tree. Version bumps change a Matter GN
+  arg, so that build is slower; NVS (pairing) is kept.
+
 ## Firmware layout
 
 ```
@@ -175,10 +188,14 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
     - 7b.1 (done) landscape 320x240, touch verified at all four corners.
     - 7b.2 (done) home screen per artboard "Living room — C5 2.8in" with placeholder data
       (`main/ui_home.c`); internal RAM unchanged (62.9KB idle, min 29.5KB).
-    - 7b.3 project fonts: Inter 4.1 (OFL) via `tools/gen_fonts.sh <Inter ttf dir>` (Node `npx
+    - 7b.3 (done) project fonts: Inter 4.1 (OFL) via `tools/gen_fonts.sh <Inter ttf dir>` (Node `npx
       lv_font_conv@1.5.3`, Node from Homebrew) -> `main/fonts/` (committed). Sizes/weights from the
       design: 8, 9 regular; 10, 11 semibold; 10, 12 bold. Glyphs: ASCII + "·" + "✓" only; add
       ranges in the script for new characters. Built-in Montserrat: only LVGL's default 14 left.
+    - 7b.4 (done) settings page (`main/ui_settings.c`): Matter QR + manual code generated on the
+      device (`main/matter_info.cpp`, takes the CHIP stack lock), hidden behind "Show setup code"
+      when paired (re-hidden every visit), pairing status, live brightness, volume slider disabled
+      until 7c. Version label bottom-right on both screens.
   - **7c** overdue alert sound: ES8311 via Waveshare `bsp_extra` (`bsp_extra_i2s_write`), short WAV
     files in the `storage` partition, amp enabled via EXIO3. No MP3 decoder. Speaker 4–8Ω.
   - **7d** (later) background images from SD (JPEG via esp_new_jpeg into PSRAM; SD shares the LCD SPI

@@ -22,8 +22,11 @@ message(STATUS "medreminder BOARD: ${BOARD}")
 # esp-matter's led_driver and iot_button components read LED/button types from this path
 set(ENV{ESP_MATTER_DEVICE_PATH} ${BOARD_DIR})
 
-set(PROJECT_VER "0.1.0")
-set(PROJECT_VER_NUMBER 1)
+# Firmware version: bump both together for a release, then tag fw-v<PROJECT_VER> (CLAUDE.md).
+# PROJECT_VER is Matter's SoftwareVersionString; PROJECT_VER_NUMBER is SoftwareVersion and must
+# increase with every release (OTA compares it).
+set(PROJECT_VER "0.2.0")
+set(PROJECT_VER_NUMBER 2)
 
 set(ESP_MATTER_PATH $ENV{ESP_MATTER_PATH})
 set(MATTER_SDK_PATH ${ESP_MATTER_PATH}/connectedhomeip/connectedhomeip)

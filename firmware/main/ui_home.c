@@ -4,10 +4,14 @@
 #if __has_include("lvgl.h") /* boards without a display build no UI */
 #include "ui_home.h"
 
+#include <string.h>
+
 #include <esp_log.h>
 
 #include "fonts/fonts.h"
+#include "fw_version.h"
 #include "icons/icons.h"
+#include "ui_settings.h"
 
 static const char *TAG = "ui_home";
 
@@ -87,7 +91,11 @@ static void dot(lv_obj_t *parent, int32_t size, uint32_t color)
 static void tap_cb(lv_event_t *e)
 {
     const char *id = lv_event_get_user_data(e);
-    ESP_LOGI(TAG, "%s %s", id, lv_event_get_code(e) == LV_EVENT_LONG_PRESSED ? "hold" : "tap");
+    bool hold = lv_event_get_code(e) == LV_EVENT_LONG_PRESSED;
+    ESP_LOGI(TAG, "%s %s", id, hold ? "hold" : "tap");
+    if (!hold && strcmp(id, "settings") == 0) {
+        ui_settings_open();
+    }
 }
 
 static void make_tappable(lv_obj_t *o, const char *id, uint32_t bg)
@@ -245,6 +253,9 @@ void ui_home_create(lv_obj_t *scr)
         build_tile(scr, &s_tiles[i]);
     }
     build_status_row(scr);
+
+    lv_obj_t *ver = label(scr, fw_version_short(), &inter_8, 0x6b7280);
+    lv_obj_align(ver, LV_ALIGN_BOTTOM_RIGHT, -8, -6);
 }
 
 #endif
