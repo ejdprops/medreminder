@@ -4,3 +4,12 @@ CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/c5_waveshare/partitions.csv"
 CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+# Run code/rodata from PSRAM (as Waveshare's factory firmware): cache stays up during flash writes,
+# so the display keeps refreshing while NVS/OTA writes happen.
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=y
+CONFIG_SPIRAM_RODATA=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+# Default malloc goes to PSRAM (default 16384 keeps every small Matter/OT alloc in internal RAM).
+# Internal RAM is left for DMA, ISRs and explicitly MALLOC_CAP_INTERNAL users.
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
