@@ -171,7 +171,8 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
   amber, later blue, overdue red pulsing), text centered: the next dose large in the center
   (153×58 at 83,86; 23/16px; tap marks it taken), the other four small around it (89×33 at
   x 27/204, y 45/152, 8px from the center pill; 12/9px), following the day clockwise: UL taken two ago, UR most recently
-  taken, LR after next, LL after that; taking a dose rotates all pills one step. No corner tiles
+  taken, LR after next, LL after that; taking a dose rotates all pills one step; tapping UR undoes it. More than five
+  doses: a scrollable list of today's doses instead. No corner tiles
   (the old package/garage/lights/door tiles were removed; icons are in git history). Bottom:
   node-sync status centered with a faint green (synced) / red outline instead of a dot, version
   centered below it, **settings gear** far right (36px drawn, 44px touch area), dev reset button
@@ -259,6 +260,19 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
       (C5: "Averak Labs" / "Pill Reminder Rect"; a round board would use "Pill Reminder Round").
       Changing it rebuilds Matter (~20 min). Apple Home may need the accessory re-added to show
       new names.
+    - 7c.4 dose schedule editing + undo. Settings > Doses (`main/ui_doses.c`): scrollable list
+      (time, name, period), tap a row to edit, "+ Add"; edit screen has name (LVGL keyboard),
+      period AM/MID/PM/BED, hour/5-min/AM-PM rollers, Save, Delete (tap twice). Up to 16 doses
+      (`DOSE_MAX`), saved as an NVS blob (`doses`/`sched`), sorted by time; the old hardcoded
+      schedule is the default until one is saved (future: defaults for new setups). Rule: one
+      person can't have two doses at the same time (`doses_set` returns the error shown).
+      Editing keeps today's taken flags on unchanged doses.
+      - Home: tap the UR (most recently taken) pill to undo. More than 5 doses: the pills are
+        replaced by a scrollable "today" list of pill-colored rows scrolled to the next dose; tap a
+        next/overdue row to take, a taken row to undo, later rows ignore taps. (Stacked period
+        pills were tried and rejected: hard to read.)
+      - One-line LVGL text areas jitter if the box is even 1px shorter than border + padding +
+        font line height (it scrolls as the cursor blinks).
   - **7d** (later) background images from SD (JPEG via esp_new_jpeg into PSRAM; SD shares the LCD SPI
     bus, so load once) or from `storage`.
 - Licensing: Waveshare code is Apache-2.0. Keep headers on copied files and list them in a

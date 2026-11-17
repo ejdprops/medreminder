@@ -1,9 +1,10 @@
 /* Home screen, 320x240 landscape. Date + time on top; at the bottom node sync status and the
  * firmware version centered, settings gear right, dev reset button left. Doses per
  * CONFIG_MEDREMINDER_UI_LAYOUT:
- *   RECT (C5 board): the next dose large in the center (tap to mark taken), four small pills around
- *     it following the day clockwise: UL = taken two ago, UR = most recently taken, LR = after
- *     next, LL = after that. Taking a dose rotates every pill one step.
+ *   RECT (C5 board): up to five doses: the next dose large in the center (tap to mark taken), four
+ *     small pills around it following the day clockwise: UL = taken two ago, UR = most recently
+ *     taken (tap to undo), LR = after next, LL = after that. Taking a dose rotates every pill one
+ *     step. More than five: a scrollable list of today's doses instead (build_today_list).
  *   ROUND: date + progress on top and the day's pills listed in a 168px circle. */
 #if __has_include("lvgl.h") /* boards without a display build no UI */
 #include "ui_home.h"
@@ -171,12 +172,27 @@ static void take_cb(lv_obj_t *obj, void *user_data)
     lv_async_call(rebuild_doses, NULL); /* not from inside the pill's own event */
 }
 
-/* The next dose's pill marks it taken on tap */
-static void make_takeable(lv_obj_t *pill, int i)
+static void untake_cb(lv_obj_t *obj, void *user_data)
+{
+    (void)obj;
+    if (!doses_untake((int)(intptr_t)user_data)) {
+        return;
+    }
+    audio_play(AUDIO_CLICK);
+    lv_async_call(rebuild_doses, NULL);
+}
+
+static void make_tappable(lv_obj_t *pill, int i, ui_tap_cb_t cb)
 {
     lv_obj_set_style_bg_color(pill, lv_color_lighten(lv_color_hex(s_pill_colors[dose_state(i)][0]), LV_OPA_20),
                               LV_STATE_PRESSED);
-    ui_on_tap(pill, take_cb, (void *)(intptr_t)i);
+    ui_on_tap(pill, cb, (void *)(intptr_t)i);
+}
+
+/* The next dose's pill marks it taken on tap */
+static void make_takeable(lv_obj_t *pill, int i)
+{
+    make_tappable(pill, i, take_cb);
 }
 
 #if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
@@ -219,20 +235,82 @@ static lv_obj_t *build_pill(lv_obj_t *area, int i, bool next, const pill_size_t 
     return pill;
 }
 
-static void build_doses(lv_obj_t *area)
+#define POSITION_COUNT ((int)(sizeof(s_positions) / sizeof(s_positions[0])))
+
+/* Up to five doses: the rotating pills */
+static void build_pills(lv_obj_t *area)
 {
     /* Next = first dose not yet taken; if all are taken, the cycle starts over at the first */
     int next = doses_next();
     int count = doses_count();
     /* Fill center, then the nearest offsets, so fewer than five doses never repeat a pill */
-    for (int p = 0; p < (int)(sizeof(s_positions) / sizeof(s_positions[0])) && p < count; p++) {
+    for (int p = 0; p < POSITION_COUNT && p < count; p++) {
         int i = ((next + s_positions[p].offset) % count + count) % count;
         bool center = s_positions[p].offset == 0;
         lv_obj_t *pill = build_pill(area, i, center, center ? &s_center_size : &s_corner_size,
                                     s_positions[p].x, s_positions[p].y);
         if (center) {
             make_takeable(pill, i);
+        } else if (s_positions[p].offset == -1 && dose_taken(i)) {
+            make_tappable(pill, i, untake_cb); /* most recently taken: tap to undo */
         }
+    }
+}
+
+/* More than five: today's doses as a scrollable list of pill-colored rows (time, name, period),
+ * scrolled to the next dose. Tap a pending/overdue row to take it, a taken row to undo it; later
+ * doses don't react, so a stray tap can't mark one early. */
+static void build_today_list(lv_obj_t *area)
+{
+    lv_obj_t *list = plain_obj(area);
+    lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(list, LV_DIR_VER);
+    lv_obj_set_size(list, 320, 166);
+    lv_obj_set_pos(list, 0, 32);
+    lv_obj_set_style_pad_hor(list, 8, 0);
+    lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(list, 4, 0);
+
+    int next = doses_next();
+    lv_obj_t *next_row = NULL;
+    for (int i = 0; i < doses_count(); i++) {
+        dose_state_t st = dose_state(i);
+        const uint32_t *c = s_pill_colors[st];
+        lv_obj_t *row = pill_base(list, i, LV_PCT(100), 30);
+        lv_obj_set_style_pad_hor(row, 14, 0);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(row, 10, 0);
+        if (st == DOSE_TAKEN) {
+            make_tappable(row, i, untake_cb);
+        } else if (st == DOSE_NEXT || st == DOSE_OVERDUE) {
+            make_takeable(row, i);
+        }
+        if (i == next) {
+            next_row = row;
+        }
+
+        char t[12];
+        dose_format_time(dose_def(i)->minute, t, sizeof(t));
+        lv_obj_set_width(label(row, t, &inter_12_semibold, c[1]), 62);
+        lv_obj_t *name = label(row, dose_name(i), &inter_12_semibold, c[1]);
+        lv_obj_set_flex_grow(name, 1);
+        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+        char buf[24];
+        label(row, slot_text(i, i == next, buf, sizeof(buf)), &inter_11_semibold, c[2]);
+    }
+    if (next_row) {
+        lv_obj_update_layout(list);
+        lv_obj_scroll_to_view(next_row, LV_ANIM_OFF);
+    }
+}
+
+static void build_doses(lv_obj_t *area)
+{
+    if (doses_count() > POSITION_COUNT) {
+        build_today_list(area);
+    } else {
+        build_pills(area);
     }
 }
 #else
@@ -353,12 +431,12 @@ static void build_reset_button(lv_obj_t *scr)
 static void clock_timer_cb(lv_timer_t *t)
 {
     (void)t;
+    time_t now = time(NULL);
+    if (doses_tick(now)) { /* also reports schedule edits before the clock is set */
+        rebuild_doses(NULL);
+    }
     if (!time_is_valid()) {
         return;
-    }
-    time_t now = time(NULL);
-    if (doses_tick(now)) {
-        rebuild_doses(NULL);
     }
     struct tm tm;
     localtime_r(&now, &tm);

@@ -1,8 +1,13 @@
-/* Dose schedule and state. Placeholder schedule until real data comes from Home/Matter.
+/* Dose schedule and state. The schedule (name, period, time; up to DOSE_MAX, sorted by time) is
+ * edited on the device and saved in NVS; until one is saved, the default schedule below is used.
  * Taken doses are saved in NVS with the date, so a reboot doesn't forget them (or invite a
  * double dose); everything resets at midnight. A dose not taken OVERDUE_MIN after its time turns
  * overdue: the alert chime plays then and every ALERT_REPEAT_MIN until no dose is overdue. */
 #include "doses.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include <esp_log.h>
 #include <nvs.h>
@@ -29,26 +34,26 @@ static const char *TAG = "doses";
 #endif
 #define NVS_KEY_DATE "date"
 #define NVS_KEY_TAKEN "taken"
+#define NVS_KEY_SCHEDULE "sched" /* blob: dose_def_t[count] */
 
-typedef struct {
-    const char *name;
-    const char *slot;
-    int minute; /* time of day, minutes after midnight */
-} dose_def_t;
+const char *const dose_periods[DOSE_PERIOD_COUNT] = {"AM", "MID", "PM", "BED"};
 
-static const dose_def_t s_defs[] = {
+/* Development schedule, used until one is saved. Eventually: defaults for new setups. */
+static const dose_def_t s_default_schedule[] = {
     {"Evan", "AM", 6 * 60},
     {"Karen", "AM", 9 * 60},
     {"Karen", "MID", 13 * 60 + 30},
     {"Karen", "PM", 19 * 60},
     {"Karen", "BED", 21 * 60},
 };
-#define COUNT ((int)(sizeof(s_defs) / sizeof(s_defs[0])))
 
+static dose_def_t s_defs[DOSE_MAX];
+static int s_count;
 static uint32_t s_taken;          /* bit i: dose i taken today */
 static uint32_t s_date;           /* YYYYMMDD the taken bits belong to; 0 until the clock is set */
-static dose_state_t s_states[COUNT];
+static dose_state_t s_states[DOSE_MAX];
 static time_t s_next_alert;       /* 0 = no alert pending */
+static bool s_dirty;              /* changed outside doses_tick: report it on the next tick */
 #if CONFIG_MEDREMINDER_DOSE_TEST
 static time_t s_test_base;        /* test schedule start; 0 until the clock is set */
 #endif
@@ -76,7 +81,7 @@ static time_t due_time(int i, time_t now)
 #endif
 }
 
-static void save(void)
+static void save_taken(void)
 {
     nvs_handle_t nvs;
     if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
@@ -89,11 +94,23 @@ static void save(void)
     nvs_close(nvs);
 }
 
-/* States without a clock: taken or not, nothing overdue */
+static void save_schedule(void)
+{
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) {
+        ESP_LOGE(TAG, "NVS open failed");
+        return;
+    }
+    nvs_set_blob(nvs, NVS_KEY_SCHEDULE, s_defs, s_count * sizeof(dose_def_t));
+    nvs_set_u32(nvs, NVS_KEY_TAKEN, s_taken);
+    nvs_commit(nvs);
+    nvs_close(nvs);
+}
+
 static void compute_states(time_t now, bool clock_ok)
 {
     bool next_found = false;
-    for (int i = 0; i < COUNT; i++) {
+    for (int i = 0; i < s_count; i++) {
         if (s_taken & (1u << i)) {
             s_states[i] = DOSE_TAKEN;
             continue;
@@ -107,21 +124,69 @@ static void compute_states(time_t now, bool clock_ok)
     }
 }
 
+static int cmp_def(const void *a, const void *b)
+{
+    const dose_def_t *x = a, *y = b;
+    if (x->minute != y->minute) {
+        return x->minute - y->minute;
+    }
+    return strcmp(x->name, y->name);
+}
+
+static bool same_dose(const dose_def_t *a, const dose_def_t *b)
+{
+    return a->minute == b->minute && strcmp(a->name, b->name) == 0 && strcmp(a->period, b->period) == 0;
+}
+
+/* Sort s_defs by time, carrying today's taken flags along with their doses */
+static void sort_keep_taken(void)
+{
+    dose_def_t old[DOSE_MAX];
+    memcpy(old, s_defs, sizeof(old));
+    uint32_t old_taken = s_taken;
+    qsort(s_defs, s_count, sizeof(dose_def_t), cmp_def);
+    s_taken = 0;
+    for (int i = 0; i < s_count; i++) {
+        for (int j = 0; j < s_count; j++) {
+            if ((old_taken & (1u << j)) && same_dose(&s_defs[i], &old[j])) {
+                s_taken |= 1u << i;
+                break;
+            }
+        }
+    }
+}
+
 void doses_init(void)
 {
     nvs_handle_t nvs;
+    size_t len = sizeof(s_defs);
+    s_count = 0;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
         nvs_get_u32(nvs, NVS_KEY_DATE, &s_date);
         nvs_get_u32(nvs, NVS_KEY_TAKEN, &s_taken);
+        if (nvs_get_blob(nvs, NVS_KEY_SCHEDULE, s_defs, &len) == ESP_OK && len % sizeof(dose_def_t) == 0) {
+            s_count = len / sizeof(dose_def_t);
+        }
         nvs_close(nvs);
     }
-    ESP_LOGI(TAG, "saved: date %u, taken 0x%02x", (unsigned)s_date, (unsigned)s_taken);
+    if (s_count == 0) {
+        s_count = sizeof(s_default_schedule) / sizeof(s_default_schedule[0]);
+        memcpy(s_defs, s_default_schedule, sizeof(s_default_schedule));
+        ESP_LOGI(TAG, "no saved schedule: using the default %d doses", s_count);
+    }
+    s_taken &= (s_count < 32 ? (1u << s_count) : 0) - 1;
+    ESP_LOGI(TAG, "%d doses; saved date %u, taken 0x%02x", s_count, (unsigned)s_date, (unsigned)s_taken);
     compute_states(0, false);
 }
 
 int doses_count(void)
 {
-    return COUNT;
+    return s_count;
+}
+
+const dose_def_t *dose_def(int i)
+{
+    return &s_defs[i];
 }
 
 const char *dose_name(int i)
@@ -131,7 +196,7 @@ const char *dose_name(int i)
 
 const char *dose_slot(int i)
 {
-    return s_defs[i].slot;
+    return s_defs[i].period;
 }
 
 dose_state_t dose_state(int i)
@@ -139,9 +204,14 @@ dose_state_t dose_state(int i)
     return s_states[i];
 }
 
+bool dose_taken(int i)
+{
+    return s_taken & (1u << i);
+}
+
 int doses_next(void)
 {
-    for (int i = 0; i < COUNT; i++) {
+    for (int i = 0; i < s_count; i++) {
         if (!(s_taken & (1u << i))) {
             return i;
         }
@@ -151,15 +221,83 @@ int doses_next(void)
 
 bool doses_take(int i)
 {
-    if (s_taken & (1u << i)) {
+    if (i < 0 || i >= s_count || (s_taken & (1u << i))) {
         return false;
     }
     s_taken |= 1u << i;
-    save();
-    time_t now = time(NULL);
-    compute_states(now, time_is_valid());
-    ESP_LOGI(TAG, "taken: %s %s", s_defs[i].name, s_defs[i].slot);
+    save_taken();
+    compute_states(time(NULL), time_is_valid());
+    ESP_LOGI(TAG, "taken: %s %s", s_defs[i].name, s_defs[i].period);
     return true;
+}
+
+bool doses_untake(int i)
+{
+    if (i < 0 || i >= s_count || !(s_taken & (1u << i))) {
+        return false;
+    }
+    s_taken &= ~(1u << i);
+    save_taken();
+    compute_states(time(NULL), time_is_valid());
+    ESP_LOGI(TAG, "undo: %s %s", s_defs[i].name, s_defs[i].period);
+    return true;
+}
+
+void dose_format_time(int minute, char *buf, int len)
+{
+    int h = minute / 60, m = minute % 60;
+    snprintf(buf, len, "%d:%02d %s", h % 12 == 0 ? 12 : h % 12, m, h < 12 ? "AM" : "PM");
+}
+
+const char *doses_set(int index, const dose_def_t *d)
+{
+    static char err[80];
+    if (d->name[0] == '\0') {
+        return "Enter a name";
+    }
+    if (index < 0 && s_count >= DOSE_MAX) {
+        snprintf(err, sizeof(err), "Schedule is full (%d doses)", DOSE_MAX);
+        return err;
+    }
+    for (int i = 0; i < s_count; i++) {
+        if (i != index && s_defs[i].minute == d->minute && strcasecmp(s_defs[i].name, d->name) == 0) {
+            char t[12];
+            dose_format_time(d->minute, t, sizeof(t));
+            snprintf(err, sizeof(err), "%.15s already has a dose at %.11s", s_defs[i].name, t);
+            return err;
+        }
+    }
+    if (index < 0) {
+        index = s_count++;
+        s_taken &= ~(1u << index);
+    } else if (!same_dose(&s_defs[index], d)) {
+        s_taken &= ~(1u << index); /* a changed dose starts not taken */
+    }
+    s_defs[index] = *d;
+    sort_keep_taken();
+    save_schedule();
+    compute_states(time(NULL), time_is_valid());
+    s_dirty = true;
+    ESP_LOGI(TAG, "saved dose: %s %s %d:%02d (%d doses)", d->name, d->period, d->minute / 60, d->minute % 60,
+             s_count);
+    return NULL;
+}
+
+void doses_delete(int index)
+{
+    if (index < 0 || index >= s_count) {
+        return;
+    }
+    ESP_LOGI(TAG, "deleted dose: %s %s", s_defs[index].name, s_defs[index].period);
+    /* Shift the dose definitions and the taken bits above index down by one */
+    uint32_t low = s_taken & ((1u << index) - 1);
+    uint32_t high = (s_taken >> (index + 1)) << index;
+    s_taken = low | high;
+    memmove(&s_defs[index], &s_defs[index + 1], (s_count - index - 1) * sizeof(dose_def_t));
+    s_count--;
+    save_schedule();
+    compute_states(time(NULL), time_is_valid());
+    s_dirty = true;
 }
 
 void doses_reset(void)
@@ -171,15 +309,17 @@ void doses_reset(void)
         s_test_base = time(NULL);
     }
 #endif
-    save();
+    save_taken();
     compute_states(time(NULL), time_is_valid());
     ESP_LOGI(TAG, "reset");
 }
 
 bool doses_tick(time_t now)
 {
+    bool changed = s_dirty;
+    s_dirty = false;
     if (!time_is_valid()) {
-        return false;
+        return changed;
     }
 #if CONFIG_MEDREMINDER_DOSE_TEST
     if (!s_test_base) {
@@ -195,22 +335,19 @@ bool doses_tick(time_t now)
         s_date = today;
         s_taken = 0;
         s_next_alert = 0;
-        save();
+        save_taken();
     }
 
-    dose_state_t before[COUNT];
-    for (int i = 0; i < COUNT; i++) {
-        before[i] = s_states[i];
-    }
+    dose_state_t before[DOSE_MAX];
+    memcpy(before, s_states, sizeof(before));
     compute_states(now, true);
-    bool changed = false;
     bool overdue = false;
-    for (int i = 0; i < COUNT; i++) {
+    for (int i = 0; i < s_count; i++) {
         changed |= s_states[i] != before[i];
         if (s_states[i] == DOSE_OVERDUE) {
             overdue = true;
             if (before[i] != DOSE_OVERDUE) {
-                ESP_LOGW(TAG, "overdue: %s %s", s_defs[i].name, s_defs[i].slot);
+                ESP_LOGW(TAG, "overdue: %s %s", s_defs[i].name, s_defs[i].period);
             }
         }
     }
