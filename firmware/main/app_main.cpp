@@ -21,6 +21,7 @@
 #include <app_priv.h>
 #include <ui.h>
 #include <fw_version.h>
+#include <time_sync.h>
 #include <app_reset.h>
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #include <platform/ESP32/OpenthreadLauncher.h>
@@ -270,6 +271,7 @@ extern "C" void app_main()
     /* Starting driver with default values */
     app_driver_light_set_defaults(light_endpoint_id);
 
+    time_sync_start();
     ui_start();
 
 #if CONFIG_ENABLE_ENCRYPTED_OTA

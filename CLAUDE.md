@@ -164,11 +164,16 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
   `examples/factory/components/Settings/assets/img_app_settings.c`), dark stylesheet colors/fonts
   (`examples/factory/main/dark/`), LVGL QR widget usage from their Settings app.
 - Design: claude.ai artifact "MedReminder Round Display UI", artboard
-  **"Living room — C5 2.8in (320×240 landscape)"**. Landscape 320×240: top line date + "3/5 taken"
-  progress; center 168px circle with per-dose pills (taken green, next amber, later blue, overdue red
-  pulsing); four 56×56 corner tiles (packages TL, garage TR, couch lights BL opening a 2-light panel,
-  front door BR); bottom-center node-sync status + **settings gear** (36px drawn, extend touch area to
-  ≥44px). Gear opens Settings: Matter setup QR + manual code (generate from esp-matter onboarding
+  **"C5 2.8in rectangular"** (renamed from "Living room — C5 2.8in": the device may move rooms and
+  more units may go elsewhere, so artboard and code names are location-neutral). Landscape 320×240:
+  top line date + live time ("MON 16 NOV · 8:58 PM"); five equal 148×50 dose pills (taken green,
+  next amber, later blue, overdue red pulsing), one per corner and one in the center. Center = next
+  dose; the rest follow the day clockwise: UL taken two ago, UR most recently taken, LR after next,
+  LL after that; taking a dose rotates all pills one step. No corner tiles (the old package/garage/
+  lights/door tiles were removed; icons are in git history). Bottom-center node-sync status +
+  **settings gear** (36px drawn, 44px touch area), version bottom-right. Center layout is per board:
+  Kconfig `MEDREMINDER_UI_LAYOUT` RECT (C5) or ROUND (old circle layout, for round displays).
+  Gear opens Settings: Matter setup QR + manual code (generate from esp-matter onboarding
   codes, show until paired), pairing status, alert volume, brightness.
 - Roadmap:
   - **7a** (done) Waveshare BSP (display, touch, CH32V003 expander) in
@@ -186,16 +191,22 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
     BLE shutdown after pairing.
   - **7b** main screen per design + settings page with Matter QR.
     - 7b.1 (done) landscape 320x240, touch verified at all four corners.
-    - 7b.2 (done) home screen per artboard "Living room — C5 2.8in" with placeholder data
+    - 7b.2 (done) home screen per artboard "C5 2.8in rectangular" with placeholder data
       (`main/ui_home.c`); internal RAM unchanged (62.9KB idle, min 29.5KB).
     - 7b.3 (done) project fonts: Inter 4.1 (OFL) via `tools/gen_fonts.sh <Inter ttf dir>` (Node `npx
       lv_font_conv@1.5.3`, Node from Homebrew) -> `main/fonts/` (committed). Sizes/weights from the
-      design: 8, 9 regular; 10, 11 semibold; 10, 12 bold. Glyphs: ASCII + "·" + "✓" only; add
+      design: 8, 9 regular; 10, 11, 14, 20 semibold; 12 bold. Glyphs: ASCII + "·" + "✓" only; add
       ranges in the script for new characters. Built-in Montserrat: only LVGL's default 14 left.
     - 7b.4 (done) settings page (`main/ui_settings.c`): Matter QR + manual code generated on the
       device (`main/matter_info.cpp`, takes the CHIP stack lock), hidden behind "Show setup code"
       when paired (re-hidden every visit), pairing status, live brightness, volume slider disabled
       until 7c. Version label bottom-right on both screens.
+    - 7b.5 (done) live clock: SNTP over Thread (`main/time_sync.c`). The Apple border routers
+      provide NAT64; `CONFIG_OPENTHREAD_DNS64_CLIENT=y` makes names resolve to NAT64 addresses.
+      First sync ~2-3 s after start, hourly after. Kconfig "MedReminder": `MEDREMINDER_TZ`
+      (POSIX, default US Central `CST6CDT,M3.2.0,M11.1.0`), `MEDREMINDER_NTP_SERVER`
+      (`pool.ntp.org`). Costs ~2.5KB internal RAM (60.2KB idle, min 27.7KB).
+    - 7b.6 (done) five-pill home screen (above), replacing the circle + corner tiles on the C5.
   - **7c** overdue alert sound: ES8311 via Waveshare `bsp_extra` (`bsp_extra_i2s_write`), short WAV
     files in the `storage` partition, amp enabled via EXIO3. No MP3 decoder. Speaker 4–8Ω.
   - **7d** (later) background images from SD (JPEG via esp_new_jpeg into PSRAM; SD shares the LCD SPI

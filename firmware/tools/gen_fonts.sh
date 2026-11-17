@@ -15,9 +15,10 @@ FONTS=(
     "8 Regular inter_8"
     "9 Regular inter_9"
     "10 SemiBold inter_10_semibold"
-    "10 Bold inter_10_bold"
     "11 SemiBold inter_11_semibold"
     "12 Bold inter_12_bold"
+    "14 SemiBold inter_14_semibold"
+    "20 SemiBold inter_20_semibold"
 )
 
 decls=""

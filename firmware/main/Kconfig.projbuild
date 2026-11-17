@@ -9,3 +9,30 @@ menu "Example Configuration"
 
 endmenu
 
+menu "MedReminder"
+
+    config MEDREMINDER_TZ
+        string "Timezone (POSIX TZ string)"
+        default "CST6CDT,M3.2.0,M11.1.0"
+        help
+            Local timezone for the clock. Default US Central with DST.
+
+    choice MEDREMINDER_UI_LAYOUT
+        prompt "Home screen center layout"
+        default MEDREMINDER_UI_LAYOUT_RECT
+        help
+            Set per board in boards/<board>/sdkconfig.defaults.
+
+        config MEDREMINDER_UI_LAYOUT_RECT
+            bool "Rectangular: full-width pill column, time on the top line"
+        config MEDREMINDER_UI_LAYOUT_ROUND
+            bool "Round: pills in a 168px circle with a TODAY/time header"
+    endchoice
+
+    config MEDREMINDER_NTP_SERVER
+        string "NTP server"
+        default "pool.ntp.org"
+        help
+            Reached over Thread through the border routers' NAT64 (needs OPENTHREAD_DNS64_CLIENT).
+
+endmenu
