@@ -103,10 +103,24 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
 - Two Apple border routers on one network `MyHome1580347441` ("Kitchen", "Living Room").
 - **Open issue:** pairing completes the Apple Home fabric (VendorId 0x1349) but the follow-up
   Apple Keychain fabric (0x1384) often times out (`Fail-safe timer expired`, then Home sends
-  `RemoveFabric`). Root cause is the iPhone (iPhone Air, iOS 27.2) not discovering Thread devices on
-  the LAN: Eve's Thread view shows no border routers while the Mac sees both
-  (`dns-sd -B _meshcop._udp`). It is not a firmware bug. Pairing worked once fully.
+  `RemoveFabric`). It is not a firmware bug. Pairing worked once fully.
   Pairing is not needed for UI/audio work.
+  - 2026-11-16 (after 7a): Home fabric committed, CASE for it came from a LAN host (likely the
+    HomePod hub); Keychain fabric got AddNOC, then no CASE Sigma1 ever arrived, fail-safe (30s)
+    expired, Home sent `RemoveFabric`. Internal heap min 26KB, so not a memory problem.
+  - From the Mac the device is fully reachable: `dns-sd -B _matterc._udp` finds it (SRP via the
+    border routers), it resolves to its Thread OMR address (`fdb8:8f45:c1d4::/64`, routed via a
+    border router), and `ping6` succeeds. So the hub and the Mac reach the device; only the iPhone's
+    CASE never arrives. Suspect: the iPhone doesn't get the OMR route (RA/RIO) or LAN mDNS (Wi-Fi
+    mesh/AP filtering, different band/SSID/VLAN).
+  - **Fixed 2026-11-16:** on the iPhone, turned off the per-network "connectivity assist" setting
+    for the home Wi-Fi and toggled Wi-Fi off/on. After that the iPhone saw `_matterc._udp` and
+    `_meshcop._udp` (Discovery app) and could ping6 the device's OMR address (HE.NET Network
+    Tools), and pairing completed both fabrics: Home 0x1349 and Keychain 0x1384 (CASE arrived ~1s
+    after AddNOC). Both changes were made together, so which one fixed it is unknown. If pairing
+    fails again, check those two first, then repeat the iPhone browse/ping test.
+    Heap min during pairing with the display running: 26KB.
+  - Eve's Thread view has never shown the network, even when pairing worked: it is not evidence.
 - Harmless log noise: `chip[DIS] ... Failed to advertise ...: 3` before joining Thread,
   `Failed to process UDP - Duplicated` (two border routers), unknown-cluster read of `0x1349_FC00`
   (Apple-only cluster), `Long dispatch time`, SEC_CERT_DAC_PROVIDER / unknown kconfig symbol warnings,
