@@ -170,7 +170,7 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
   top line date + live time, 16px bold ("MON 16 NOV · 8:58 PM"). Dose pills (taken green, next
   amber, later blue, overdue red pulsing), text centered: the next dose large in the center
   (153×58 at 83,86; 23/16px; tap marks it taken), the other four small around it (89×33 at
-  x 19/212, y 37/160; 12/9px), following the day clockwise: UL taken two ago, UR most recently
+  x 27/204, y 45/152, 8px from the center pill; 12/9px), following the day clockwise: UL taken two ago, UR most recently
   taken, LR after next, LL after that; taking a dose rotates all pills one step. No corner tiles
   (the old package/garage/lights/door tiles were removed; icons are in git history). Bottom:
   node-sync status centered with a faint green (synced) / red outline instead of a dot, version
@@ -233,8 +233,32 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
         I2S DMA buffer, so push `DMA_FLUSH_MS` of silence before muting.
       - Audio must start from the BSP init task (`ui.c` calls `audio_start()` after display start):
         BSP init functions are not thread-safe.
-      - **TODO:** try different tones for the click and for the alert (current: click 1800Hz 30ms,
-        preview 2 x 880Hz 150ms) and pick by ear. First click after idle lags ~0.2s (amp start).
+      - **TODO:** try different tones for the click and for the alert (current: click 2kHz
+        decaying 25ms; alert/preview C6-E6-G6 1047/1319/1568Hz, 70% level) and pick by ear. First
+        click after idle lags ~0.2s (amp start).
+    - 7c.2 (done, v0.4.0) overdue alerts (`main/doses.c`): placeholder schedule Evan AM 6:00, Karen AM
+      9:00, MID 13:30, PM 19:00, BED 21:00. Overdue 30 min after the time: pill red + pulsing,
+      center shows "late", alert chime now and every 5 min until taken. Taken flags in NVS
+      (`doses`/`date`+`taken`), reset at midnight. Dev reset button clears them.
+      - Kconfig `MEDREMINDER_DOSE_TEST` (default off): first dose due at clock set, then every
+        2 min, overdue after 1 min, repeat every minute; saves to NVS namespace `doses_test`.
+      - Sounds are pre-rendered into PSRAM at audio start (~40KB). Rendering with sinf in real
+        time crackled while a pill pulsed: LVGL (priority 6) redraws nonstop and the audio task
+        (5) fell behind the 90ms DMA buffer. It was not the speaker: clean at 100% on Settings.
+      - `esp_codec_dev_write` applies software volume **in place**: write a copy, never a stored
+        buffer (it scaled the stored sound down on every play until silent).
+      - The ES8311/amp keep their state across flash and reset. Once all sound stopped and only a
+        USB power cycle brought it back: if audio dies with no errors in the log, power-cycle
+        first.
+      - 24kHz made the crackle worse (more samples to compute); 16kHz is fine.
+    - 7c.3 (done, v0.4.0) About screen (`main/ui_about.c`, Settings > About): Averak Labs neon logo
+      (`main/images/src/averak_labs_neon.png`, from ~/AverakLabs; converted by
+      `tools/png_image.py` to RGB565 116x168, screen bg = logo bg #0b0d14), product/vendor from
+      Matter Basic Information, firmware, Matter VID/PID, hardware, uptime, licenses.
+      Matter names come from `boards/<board>/CHIPProjectConfig.h` via `CONFIG_CHIP_PROJECT_CONFIG`
+      (C5: "Averak Labs" / "Pill Reminder Rect"; a round board would use "Pill Reminder Round").
+      Changing it rebuilds Matter (~20 min). Apple Home may need the accessory re-added to show
+      new names.
   - **7d** (later) background images from SD (JPEG via esp_new_jpeg into PSRAM; SD shares the LCD SPI
     bus, so load once) or from `storage`.
 - Licensing: Waveshare code is Apache-2.0. Keep headers on copied files and list them in a

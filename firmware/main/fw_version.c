@@ -9,8 +9,8 @@
 
 #include "build_info.h"
 
-/* "v0.2.0" at a clean release tag; past it, the commit count since the tag and "*" for uncommitted
- * changes ("v0.2.0-2*"); "v0.2.0-dev" if the latest tag isn't this PROJECT_VER. */
+/* "v0.2.0" at a clean release tag; past it, the commit count since the tag ("v0.2.0-2"), and "*"
+ * for uncommitted changes ("v0.2.0*", "v0.2.0-2*"); "v0.2.0-dev" if the latest tag isn't this PROJECT_VER. */
 const char *fw_version_short(void)
 {
     static char buf[40];
@@ -27,8 +27,8 @@ const char *fw_version_short(void)
         const char *rest = BUILD_GIT_DESC + n;
         int commits = strstr(rest, "-g") ? atoi(rest + 1) : 0;
         bool dirty = strstr(rest, "-dirty") != NULL;
-        if (commits == 0 && !dirty) {
-            snprintf(buf, sizeof(buf), "v%s", ver);
+        if (commits == 0) {
+            snprintf(buf, sizeof(buf), "v%s%s", ver, dirty ? "*" : "");
         } else {
             snprintf(buf, sizeof(buf), "v%s-%d%s", ver, commits, dirty ? "*" : "");
         }

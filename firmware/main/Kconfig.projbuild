@@ -36,6 +36,15 @@ menu "MedReminder"
             Adds a bottom-left button that resets the dose states, for testing. Turn off for
             release builds.
 
+    config MEDREMINDER_DOSE_TEST
+        bool "Test dose schedule (first alert after 1 min)"
+        default n
+        help
+            Replaces the dose times with a schedule starting when the clock is set: the first dose
+            due immediately, then one every 2 minutes; overdue after 1 minute, alert repeat every
+            minute. The dev reset button
+            restarts it. For testing overdue alerts without waiting hours.
+
     config MEDREMINDER_NTP_SERVER
         string "NTP server"
         default "pool.ntp.org"

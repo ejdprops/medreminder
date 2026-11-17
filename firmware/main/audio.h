@@ -6,7 +6,9 @@ extern "C" {
 
 typedef enum {
     AUDIO_CLICK,   /* UI feedback when a tap changes something */
-    AUDIO_PREVIEW, /* volume preview, two short beeps */
+    AUDIO_PREVIEW, /* volume preview: the alert chime */
+    AUDIO_ALERT,   /* overdue dose: three rising notes (C6 E6 G6) */
+    AUDIO_SOUND_COUNT
 } audio_sound_t;
 
 /* Start the audio task and load the saved volume. Call once the BSP's I2C bus and IO expander are

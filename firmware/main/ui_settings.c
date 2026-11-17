@@ -13,6 +13,7 @@
 #include "fw_version.h"
 #include "icons/icons.h"
 #include "matter_info.h"
+#include "ui_about.h"
 #include "ui_tap.h"
 
 #if __has_include("bsp/esp-bsp.h")
@@ -121,6 +122,14 @@ static void back_cb(lv_obj_t *obj, void *user_data)
     lv_screen_load(s_return_to);
     audio_play(AUDIO_CLICK);
     ESP_LOGI(TAG, "back");
+}
+
+static void about_cb(lv_obj_t *obj, void *user_data)
+{
+    (void)obj;
+    (void)user_data;
+    ui_about_open();
+    audio_play(AUDIO_CLICK);
 }
 
 static void reveal_cb(lv_obj_t *obj, void *user_data)
@@ -244,6 +253,20 @@ static void build(void)
 
     lv_obj_t *title = label(s_screen, "Settings", &inter_12_bold, 0xe5e7eb);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 54, 17);
+
+    /* Header right: About */
+    lv_obj_t *about = plain_obj(s_screen);
+    lv_obj_set_size(about, 72, 36);
+    lv_obj_set_pos(about, 240, 6);
+    lv_obj_set_style_radius(about, 10, 0);
+    lv_obj_set_style_bg_opa(about, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(about, lv_color_hex(0x171920), 0);
+    lv_obj_set_style_bg_color(about, lv_color_hex(0x2a2e38), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(about, 1, 0);
+    lv_obj_set_style_border_color(about, lv_color_hex(0x2e333d), 0);
+    lv_obj_set_ext_click_area(about, 4);
+    ui_on_tap(about, about_cb, NULL);
+    lv_obj_center(label(about, "About", &inter_11_semibold, 0xd1d5db));
 
     /* Left: setup code */
     build_qr_card(s_screen);

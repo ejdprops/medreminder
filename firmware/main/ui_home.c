@@ -14,6 +14,7 @@
 #include <esp_log.h>
 
 #include "audio.h"
+#include "doses.h"
 #include "fonts/fonts.h"
 #include "fw_version.h"
 #include "icons/icons.h"
@@ -27,26 +28,6 @@ static lv_obj_t *s_date_label;
 static lv_obj_t *s_time_label;
 static lv_obj_t *s_dose_area; /* holds the pills; rebuilt when a dose is taken */
 static int s_last_minute = -1; /* clock labels last drawn for this minute */
-
-typedef enum { DOSE_TAKEN, DOSE_NEXT, DOSE_LATER, DOSE_OVERDUE } dose_state_t;
-
-typedef struct {
-    const char *name;
-    const char *slot;
-    dose_state_t state;
-} dose_t;
-
-/* Placeholder data, in daily order. Tapping the next dose marks it taken (resets on reboot and with
- * the dev reset button). */
-static dose_t s_doses[] = {
-    {"Evan", "AM", DOSE_TAKEN},
-    {"Karen", "AM", DOSE_TAKEN},
-    {"Karen", "MID", DOSE_NEXT},
-    {"Karen", "PM", DOSE_LATER},
-    {"Karen", "BED", DOSE_LATER},
-};
-#define DOSE_COUNT ((int)(sizeof(s_doses) / sizeof(s_doses[0])))
-static dose_state_t s_initial_states[DOSE_COUNT];
 
 /* bg, name text, slot text per dose_state_t */
 static const uint32_t s_pill_colors[][3] = {
@@ -127,28 +108,36 @@ static void pulse_exec(void *obj, int32_t v)
     lv_obj_set_style_bg_opa(obj, (lv_opa_t)v, 0);
 }
 
-/* "AM ✓" for taken, "MID · next" for next, else the slot */
-static const char *slot_text(const dose_t *d, char *buf, size_t len)
+/* "AM ✓" for taken, "MID · next" for next, "MID · late" for the overdue next dose, else the slot */
+static const char *slot_text(int i, bool next, char *buf, size_t len)
 {
-    if (d->state == DOSE_TAKEN) {
-        lv_snprintf(buf, len, "%s ✓", d->slot);
+    switch (dose_state(i)) {
+    case DOSE_TAKEN:
+        lv_snprintf(buf, len, "%s \u2713", dose_slot(i));
         return buf;
-    }
-    if (d->state == DOSE_NEXT) {
-        lv_snprintf(buf, len, "%s · next", d->slot);
+    case DOSE_NEXT:
+        lv_snprintf(buf, len, "%s \u00b7 next", dose_slot(i));
         return buf;
+    case DOSE_OVERDUE:
+        if (next) {
+            lv_snprintf(buf, len, "%s \u00b7 late", dose_slot(i));
+            return buf;
+        }
+        return dose_slot(i);
+    default:
+        return dose_slot(i);
     }
-    return d->slot;
 }
 
-static lv_obj_t *pill_base(lv_obj_t *parent, const dose_t *d, int32_t w, int32_t h)
+static lv_obj_t *pill_base(lv_obj_t *parent, int i, int32_t w, int32_t h)
 {
+    dose_state_t st = dose_state(i);
     lv_obj_t *pill = plain_obj(parent);
     lv_obj_set_size(pill, w, h);
     lv_obj_set_style_radius(pill, h / 2, 0);
     lv_obj_set_style_bg_opa(pill, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(pill, lv_color_hex(s_pill_colors[d->state][0]), 0);
-    if (d->state == DOSE_OVERDUE) {
+    lv_obj_set_style_bg_color(pill, lv_color_hex(s_pill_colors[st][0]), 0);
+    if (st == DOSE_OVERDUE) {
         lv_anim_t a;
         lv_anim_init(&a);
         lv_anim_set_var(&a, pill);
@@ -175,22 +164,19 @@ static void rebuild_doses(void *arg)
 static void take_cb(lv_obj_t *obj, void *user_data)
 {
     (void)obj;
-    dose_t *d = user_data;
-    if (d->state == DOSE_TAKEN) {
+    if (!doses_take((int)(intptr_t)user_data)) {
         return;
     }
-    d->state = DOSE_TAKEN;
-    ESP_LOGI(TAG, "taken: %s %s", d->name, d->slot);
     audio_play(AUDIO_CLICK);
     lv_async_call(rebuild_doses, NULL); /* not from inside the pill's own event */
 }
 
 /* The next dose's pill marks it taken on tap */
-static void make_takeable(lv_obj_t *pill, dose_t *d)
+static void make_takeable(lv_obj_t *pill, int i)
 {
-    lv_obj_set_style_bg_color(pill, lv_color_lighten(lv_color_hex(s_pill_colors[d->state][0]), LV_OPA_20),
+    lv_obj_set_style_bg_color(pill, lv_color_lighten(lv_color_hex(s_pill_colors[dose_state(i)][0]), LV_OPA_20),
                               LV_STATE_PRESSED);
-    ui_on_tap(pill, take_cb, d);
+    ui_on_tap(pill, take_cb, (void *)(intptr_t)i);
 }
 
 #if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
@@ -210,47 +196,42 @@ static const struct {
     int32_t x, y;
 } s_positions[] = {
     {0, 83, 86},    /* center: next */
-    {-1, 212, 37},  /* upper right: most recently taken */
-    {1, 212, 160},  /* lower right: after next */
-    {2, 19, 160},   /* lower left */
-    {-2, 19, 37},   /* upper left: taken two ago */
+    {-1, 204, 45},  /* upper right: most recently taken */
+    {1, 204, 152},  /* lower right: after next */
+    {2, 27, 152},   /* lower left */
+    {-2, 27, 45},   /* upper left: taken two ago */
 };
 
-static lv_obj_t *build_pill(lv_obj_t *area, const dose_t *d, const pill_size_t *sz, int32_t x, int32_t y)
+static lv_obj_t *build_pill(lv_obj_t *area, int i, bool next, const pill_size_t *sz, int32_t x, int32_t y)
 {
-    const uint32_t *c = s_pill_colors[d->state];
-    lv_obj_t *pill = pill_base(area, d, sz->w, sz->h);
+    const uint32_t *c = s_pill_colors[dose_state(i)];
+    lv_obj_t *pill = pill_base(area, i, sz->w, sz->h);
     lv_obj_set_pos(pill, x, y);
     lv_obj_set_style_pad_hor(pill, sz->h / 3, 0);
     flex_center(pill, LV_FLEX_FLOW_COLUMN, 0);
 
-    lv_obj_t *name = label(pill, d->name, sz->name_font, c[1]);
+    lv_obj_t *name = label(pill, dose_name(i), sz->name_font, c[1]);
     lv_obj_set_width(name, LV_PCT(100));
     lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     char buf[24];
-    label(pill, slot_text(d, buf, sizeof(buf)), sz->slot_font, c[2]);
+    label(pill, slot_text(i, next, buf, sizeof(buf)), sz->slot_font, c[2]);
     return pill;
 }
 
 static void build_doses(lv_obj_t *area)
 {
     /* Next = first dose not yet taken; if all are taken, the cycle starts over at the first */
-    int next = 0;
-    for (int i = 0; i < DOSE_COUNT; i++) {
-        if (s_doses[i].state != DOSE_TAKEN) {
-            next = i;
-            break;
-        }
-    }
+    int next = doses_next();
+    int count = doses_count();
     /* Fill center, then the nearest offsets, so fewer than five doses never repeat a pill */
-    for (int p = 0; p < (int)(sizeof(s_positions) / sizeof(s_positions[0])) && p < DOSE_COUNT; p++) {
-        int i = ((next + s_positions[p].offset) % DOSE_COUNT + DOSE_COUNT) % DOSE_COUNT;
+    for (int p = 0; p < (int)(sizeof(s_positions) / sizeof(s_positions[0])) && p < count; p++) {
+        int i = ((next + s_positions[p].offset) % count + count) % count;
         bool center = s_positions[p].offset == 0;
-        lv_obj_t *pill = build_pill(area, &s_doses[i], center ? &s_center_size : &s_corner_size,
+        lv_obj_t *pill = build_pill(area, i, center, center ? &s_center_size : &s_corner_size,
                                     s_positions[p].x, s_positions[p].y);
         if (center) {
-            make_takeable(pill, &s_doses[i]);
+            make_takeable(pill, i);
         }
     }
 }
@@ -271,21 +252,22 @@ static void build_doses(lv_obj_t *area)
     s_time_label = label(circle, "TODAY · --:--", &inter_8, 0x6b7280);
     lv_obj_set_style_text_letter_space(s_time_label, 1, 0);
     bool next_found = false;
-    for (int i = 0; i < DOSE_COUNT; i++) {
-        dose_t *d = &s_doses[i];
-        lv_obj_t *pill = pill_base(circle, d, 104, 20);
-        if (!next_found && d->state != DOSE_TAKEN) {
+    for (int i = 0; i < doses_count(); i++) {
+        dose_state_t st = dose_state(i);
+        lv_obj_t *pill = pill_base(circle, i, 104, 20);
+        bool next = !next_found && st != DOSE_TAKEN;
+        if (next) {
             next_found = true;
-            make_takeable(pill, d);
+            make_takeable(pill, i);
         }
         lv_obj_set_style_pad_hor(pill, 9, 0);
         lv_obj_set_flex_flow(pill, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(pill, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_t *name = label(pill, d->name, &inter_10_semibold, s_pill_colors[d->state][1]);
+        lv_obj_t *name = label(pill, dose_name(i), &inter_10_semibold, s_pill_colors[st][1]);
         lv_obj_set_flex_grow(name, 1);
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         char buf[24];
-        label(pill, slot_text(d, buf, sizeof(buf)), &inter_9, s_pill_colors[d->state][2]);
+        label(pill, slot_text(i, next, buf, sizeof(buf)), &inter_9, s_pill_colors[st][2]);
     }
 }
 #endif
@@ -334,20 +316,12 @@ static void build_bottom_row(lv_obj_t *scr)
 }
 
 #if CONFIG_MEDREMINDER_DEV_TOOLS
-/* Dev: put the doses back to their boot states */
+/* Dev: mark every dose not taken (and restart the test schedule) */
 static void reset_cb(lv_obj_t *obj, void *user_data)
 {
     (void)obj;
     (void)user_data;
-    bool changed = false;
-    for (int i = 0; i < DOSE_COUNT; i++) {
-        changed |= s_doses[i].state != s_initial_states[i];
-        s_doses[i].state = s_initial_states[i];
-    }
-    if (!changed) {
-        return;
-    }
-    ESP_LOGI(TAG, "dev: dose states reset");
+    doses_reset();
     audio_play(AUDIO_CLICK);
     rebuild_doses(NULL);
 }
@@ -374,7 +348,8 @@ static void build_reset_button(lv_obj_t *scr)
 }
 #endif
 
-/* Date and time labels from the system clock; dashes until the first SNTP sync. */
+/* Every second: dose states and alerts, then the date and time labels (dashes until the first
+ * SNTP sync) */
 static void clock_timer_cb(lv_timer_t *t)
 {
     (void)t;
@@ -382,6 +357,9 @@ static void clock_timer_cb(lv_timer_t *t)
         return;
     }
     time_t now = time(NULL);
+    if (doses_tick(now)) {
+        rebuild_doses(NULL);
+    }
     struct tm tm;
     localtime_r(&now, &tm);
     int minute = tm.tm_yday * 1440 + tm.tm_hour * 60 + tm.tm_min;
@@ -408,9 +386,7 @@ void ui_home_create(lv_obj_t *scr)
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x0b0c0f), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
-    for (int i = 0; i < DOSE_COUNT; i++) {
-        s_initial_states[i] = s_doses[i].state;
-    }
+    doses_init();
     build_top_line(scr);
     /* Transparent, non-clickable area in screen coordinates, so pill positions stay absolute */
     s_dose_area = plain_obj(scr);

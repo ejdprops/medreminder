@@ -1,4 +1,4 @@
-idf_component_register(SRC_DIRS          "." "icons" "fonts"
+idf_component_register(SRC_DIRS          "." "icons" "fonts" "images"
                        PRIV_INCLUDE_DIRS  "." "${ESP_MATTER_PATH}/examples/common/utils")
 
 if (CONFIG_ENABLE_SET_CERT_DECLARATION_API)

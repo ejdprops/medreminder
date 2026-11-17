@@ -21,3 +21,6 @@ CONFIG_LV_USE_CLIB_SPRINTF=y
 CONFIG_LV_USE_QRCODE=y
 # Home screen: rectangular 320x240 layout (pill column, time on top line)
 CONFIG_MEDREMINDER_UI_LAYOUT_RECT=y
+
+# Matter Basic Information names (Manufacturer/Model in Apple Home), path relative to firmware/
+CONFIG_CHIP_PROJECT_CONFIG="boards/c5_waveshare/CHIPProjectConfig.h"

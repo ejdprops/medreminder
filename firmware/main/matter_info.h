@@ -14,6 +14,15 @@ bool matter_get_manual_code(char *buf, size_t len); /* 11 digits, no dashes */
 /* Number of commissioned fabrics; fills up to max vendor IDs (0x1349 Apple Home, 0x1384 Apple Keychain). */
 int matter_fabric_vendors(uint16_t *vendor_ids, int max);
 
+/* Basic Information as Apple Home shows it (Manufacturer = vendor_name, Model = product_name) */
+typedef struct {
+    char vendor_name[33];
+    char product_name[33];
+    uint16_t vendor_id;
+    uint16_t product_id;
+} matter_device_info_t;
+bool matter_get_device_info(matter_device_info_t *info);
+
 #ifdef __cplusplus
 }
 #endif

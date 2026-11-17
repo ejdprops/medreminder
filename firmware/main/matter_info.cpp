@@ -1,6 +1,7 @@
 #include "matter_info.h"
 
 #include <app/server/Server.h>
+#include <platform/DeviceInstanceInfoProvider.h>
 #include <platform/PlatformManager.h>
 #include <setup_payload/OnboardingCodesUtil.h>
 
@@ -40,4 +41,18 @@ extern "C" int matter_fabric_vendors(uint16_t *vendor_ids, int max)
         n++;
     }
     return n;
+}
+
+extern "C" bool matter_get_device_info(matter_device_info_t *info)
+{
+    StackLock lock;
+    DeviceLayer::DeviceInstanceInfoProvider *p = DeviceLayer::GetDeviceInstanceInfoProvider();
+    if (!p) {
+        return false;
+    }
+    bool ok = p->GetVendorName(info->vendor_name, sizeof(info->vendor_name)) == CHIP_NO_ERROR;
+    ok &= p->GetProductName(info->product_name, sizeof(info->product_name)) == CHIP_NO_ERROR;
+    ok &= p->GetVendorId(info->vendor_id) == CHIP_NO_ERROR;
+    ok &= p->GetProductId(info->product_id) == CHIP_NO_ERROR;
+    return ok;
 }
