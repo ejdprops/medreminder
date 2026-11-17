@@ -7,6 +7,7 @@
 */
 
 #include <esp_err.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <nvs_flash.h>
 
@@ -38,6 +39,16 @@ using namespace chip::DeviceLayer;
 #endif
 
 static const char *TAG = "app_main";
+
+/* Internal RAM is the scarce resource once display/audio are added; PSRAM listed separately. */
+static void log_heap(const char *state)
+{
+    ESP_LOGI(TAG, "heap[%s] internal free %u min %u largest %u | psram free %u", state,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+}
 uint16_t light_endpoint_id = 0;
 
 using namespace esp_matter;
@@ -249,6 +260,7 @@ extern "C" void app_main()
     ABORT_APP_ON_FAILURE(err == ESP_OK, ESP_LOGE(TAG, "Failed to start Matter, err:%d", err));
 
     MEMORY_PROFILER_DUMP_HEAP_STAT("matter started");
+    log_heap("matter started");
 
     /* Starting driver with default values */
     app_driver_light_set_defaults(light_endpoint_id);
@@ -271,6 +283,7 @@ extern "C" void app_main()
 
     while (true) {
         MEMORY_PROFILER_DUMP_HEAP_STAT("Idle");
+        log_heap("idle");
         vTaskDelay(10000 / portTICK_PERIOD_MS);
     }
 }
