@@ -12,6 +12,7 @@ static const char *TAG = "ui";
 #include "bsp/esp-bsp.h"
 #include "images/images.h"
 #include "ui_home.h"
+#include "ui_theme.h"
 
 #define SPLASH_MS 5000
 
@@ -48,6 +49,7 @@ static void ui_init_task(void *arg)
         ESP_LOGE(TAG, "display start failed");
     } else {
         if (bsp_display_lock(UINT32_MAX)) {
+            ui_theme_init();
             lv_obj_t *home = lv_obj_create(NULL);
             ui_home_create(home);
             show_splash_then(home);

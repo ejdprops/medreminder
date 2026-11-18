@@ -34,16 +34,54 @@ static const char *TAG = "doses";
 #endif
 #define NVS_KEY_DATE "date"
 #define NVS_KEY_TAKEN "taken"
-#define NVS_KEY_SCHEDULE "sched" /* blob: dose_def_t[count] */
+#define NVS_KEY_SCHEDULE "sched2" /* blob: dose_def_t[count] */
+#define NVS_KEY_SCHEDULE_V1 "sched" /* before colors: dose_def_v1_t[count], migrated on load */
+
+typedef struct {
+    char name[DOSE_NAME_MAX + 1];
+    char period[8];
+    int minute;
+} dose_def_v1_t;
 
 const char *const dose_periods[DOSE_PERIOD_COUNT] = {"AM", "MID", "PM", "BED"};
 
+const uint32_t dose_colors[DOSE_COLOR_COUNT] = {
+    0x1f45e6, /* royal blue */
+    0x4f46e5, /* indigo */
+    0xc020e6, /* purple: a deeper take on the logo's magenta-purple */
+    0xdb2777, /* pink */
+    0xea580c, /* orange */
+    0xd97706, /* amber */
+    0x0d9488, /* teal */
+    0x475569, /* slate */
+    0xdc2626, /* red */
+    0xeab308, /* yellow */
+    0x16a34a, /* green */
+    0x8ecdf0, /* pale sky blue */
+};
+
+/* Spectrum order: red, orange, amber, yellow, green, teal, sky, royal blue, indigo, purple, pink,
+ * slate */
+const uint8_t dose_color_order[DOSE_COLOR_COUNT] = {8, 4, 5, 9, 10, 6, 11, 0, 1, 2, 3, 7};
+
+/* Starting color for doses that have none yet (defaults, migrated schedules): by period */
+static uint8_t period_color(const char *period)
+{
+    static const uint8_t by_period[DOSE_PERIOD_COUNT] = {5, 6, 0, 2}; /* amber, teal, royal blue, purple */
+    for (int p = 0; p < DOSE_PERIOD_COUNT; p++) {
+        if (strcmp(period, dose_periods[p]) == 0) {
+            return by_period[p];
+        }
+    }
+    return 7;
+}
+
 /* Defaults for a new setup (nothing saved yet), one per period; rename/edit on the device */
 static const dose_def_t s_default_schedule[] = {
-    {"Dose", "AM", 7 * 60},
-    {"Dose", "MID", 12 * 60},
-    {"Dose", "PM", 18 * 60},
-    {"Dose", "BED", 21 * 60},
+    {"Dose", "AM", 7 * 60, 5, DOSE_OPACITY_DEFAULT, DOSE_DAILY},
+    {"Dose", "MID", 12 * 60, 6, DOSE_OPACITY_DEFAULT, DOSE_DAILY},
+    {"Dose", "PM", 18 * 60, 0, DOSE_OPACITY_DEFAULT, DOSE_DAILY},
+    {"Dose", "BED", 21 * 60, 2, DOSE_OPACITY_DEFAULT, DOSE_DAILY},
 };
 
 static dose_def_t s_defs[DOSE_MAX];
@@ -52,6 +90,7 @@ static uint32_t s_taken;          /* bit i: dose i taken today */
 static uint32_t s_date;           /* YYYYMMDD the taken bits belong to; 0 until the clock is set */
 static dose_state_t s_states[DOSE_MAX];
 static time_t s_next_alert;       /* 0 = no alert pending */
+static uint8_t s_today = DOSE_DAILY; /* today's weekday bit; all days until the clock is set */
 static bool s_dirty;              /* changed outside doses_tick: report it on the next tick */
 #if CONFIG_MEDREMINDER_DOSE_TEST
 static time_t s_test_base;        /* test schedule start; 0 until the clock is set */
@@ -112,10 +151,24 @@ static void save_schedule(void)
     nvs_close(nvs);
 }
 
+static bool due_today(int i)
+{
+    return s_defs[i].days & s_today;
+}
+
 static void compute_states(time_t now, bool clock_ok)
 {
+    if (clock_ok) {
+        struct tm tm;
+        localtime_r(&now, &tm);
+        s_today = 1u << tm.tm_wday;
+    }
     bool next_found = false;
     for (int i = 0; i < s_count; i++) {
+        if (!due_today(i)) {
+            s_states[i] = DOSE_LATER; /* not shown today */
+            continue;
+        }
         if (s_taken & (1u << i)) {
             s_states[i] = DOSE_TAKEN;
             continue;
@@ -140,7 +193,8 @@ static int cmp_def(const void *a, const void *b)
 
 static bool same_dose(const dose_def_t *a, const dose_def_t *b)
 {
-    return a->minute == b->minute && strcmp(a->name, b->name) == 0 && strcmp(a->period, b->period) == 0;
+    return a->minute == b->minute && a->days == b->days && strcmp(a->name, b->name) == 0 &&
+           strcmp(a->period, b->period) == 0;
 }
 
 /* Sort s_defs by time, carrying today's taken flags along with their doses */
@@ -166,6 +220,7 @@ void doses_init(void)
     nvs_handle_t nvs;
     size_t len = sizeof(s_defs);
     bool saved = false; /* an empty saved schedule (every dose deleted) stays empty */
+    bool migrated = false;
     s_count = 0;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
         nvs_get_u32(nvs, NVS_KEY_DATE, &s_date);
@@ -173,13 +228,43 @@ void doses_init(void)
         if (nvs_get_blob(nvs, NVS_KEY_SCHEDULE, s_defs, &len) == ESP_OK) {
             s_count = len % sizeof(dose_def_t) == 0 ? len / sizeof(dose_def_t) : 0; /* 1 byte: empty */
             saved = true;
+        } else {
+            static dose_def_v1_t v1[DOSE_MAX]; /* static: keep it off the UI task stack */
+            len = sizeof(v1);
+            if (nvs_get_blob(nvs, NVS_KEY_SCHEDULE_V1, v1, &len) == ESP_OK) {
+                s_count = len % sizeof(dose_def_v1_t) == 0 ? len / sizeof(dose_def_v1_t) : 0;
+                for (int i = 0; i < s_count; i++) {
+                    memcpy(s_defs[i].name, v1[i].name, sizeof(s_defs[i].name));
+                    memcpy(s_defs[i].period, v1[i].period, sizeof(s_defs[i].period));
+                    s_defs[i].minute = v1[i].minute;
+                    s_defs[i].color = period_color(v1[i].period);
+                    s_defs[i].opacity = DOSE_OPACITY_DEFAULT;
+                    s_defs[i].days = DOSE_DAILY;
+                }
+                saved = migrated = true;
+            }
         }
         nvs_close(nvs);
+    }
+    if (migrated) {
+        ESP_LOGI(TAG, "migrated %d doses to the schedule with colors", s_count);
+        save_schedule();
     }
     if (!saved) {
         s_count = sizeof(s_default_schedule) / sizeof(s_default_schedule[0]);
         memcpy(s_defs, s_default_schedule, sizeof(s_default_schedule));
         ESP_LOGI(TAG, "no saved schedule: using the default %d doses", s_count);
+    }
+    for (int i = 0; i < s_count; i++) {
+        if (s_defs[i].color >= DOSE_COLOR_COUNT) {
+            s_defs[i].color = period_color(s_defs[i].period);
+        }
+        if (!(s_defs[i].days & DOSE_DAILY)) {
+            s_defs[i].days = DOSE_DAILY; /* saved before weekly doses existed (padding byte) */
+        }
+        if (s_defs[i].opacity < DOSE_OPACITY_MIN || s_defs[i].opacity > DOSE_OPACITY_MAX) {
+            s_defs[i].opacity = DOSE_OPACITY_DEFAULT; /* saved before opacity existed (padding byte) */
+        }
     }
     s_taken &= (s_count < 32 ? (1u << s_count) : 0) - 1;
     ESP_LOGI(TAG, "%d doses; saved date %u, taken 0x%02x", s_count, (unsigned)s_date, (unsigned)s_taken);
@@ -211,6 +296,11 @@ dose_state_t dose_state(int i)
     return s_states[i];
 }
 
+bool dose_due_today(int i)
+{
+    return due_today(i);
+}
+
 bool dose_taken(int i)
 {
     return s_taken & (1u << i);
@@ -219,7 +309,7 @@ bool dose_taken(int i)
 int doses_next(void)
 {
     for (int i = 0; i < s_count; i++) {
-        if (!(s_taken & (1u << i))) {
+        if (due_today(i) && !(s_taken & (1u << i))) {
             return i;
         }
     }
@@ -252,8 +342,7 @@ bool doses_untake(int i)
 
 void dose_format_time(int minute, char *buf, int len)
 {
-    int h = minute / 60, m = minute % 60;
-    snprintf(buf, len, "%d:%02d %s", h % 12 == 0 ? 12 : h % 12, m, h < 12 ? "AM" : "PM");
+    snprintf(buf, len, "%02d%02d", minute / 60, minute % 60); /* 24 h, military style: "0600" */
 }
 
 const char *doses_set(int index, const dose_def_t *d)
@@ -267,7 +356,8 @@ const char *doses_set(int index, const dose_def_t *d)
         return err;
     }
     for (int i = 0; i < s_count; i++) {
-        if (i != index && s_defs[i].minute == d->minute && strcasecmp(s_defs[i].name, d->name) == 0) {
+        if (i != index && s_defs[i].minute == d->minute && (s_defs[i].days & d->days) &&
+            strcasecmp(s_defs[i].name, d->name) == 0) {
             char t[12];
             dose_format_time(d->minute, t, sizeof(t));
             snprintf(err, sizeof(err), "%.15s already has a dose at %.11s", s_defs[i].name, t);

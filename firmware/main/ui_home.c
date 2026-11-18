@@ -19,23 +19,19 @@
 #include "fw_version.h"
 #include "icons/icons.h"
 #include "time_sync.h"
+#include "ui_dose_row.h"
+#include "ui_scroll.h"
 #include "ui_tap.h"
+#include "ui_theme.h"
 #include "ui_settings.h"
 
 static const char *TAG = "ui_home";
 
+static lv_obj_t *s_day_label; /* weekday, its own label for a wider gap before the date */
 static lv_obj_t *s_date_label;
 static lv_obj_t *s_time_label;
 static lv_obj_t *s_dose_area; /* holds the pills; rebuilt when a dose is taken */
 static int s_last_minute = -1; /* clock labels last drawn for this minute */
-
-/* bg, name text, slot text per dose_state_t */
-static const uint32_t s_pill_colors[][3] = {
-    [DOSE_TAKEN] = {0x15803d, 0xf0fdf4, 0xbbf7d0},
-    [DOSE_NEXT] = {0xb45309, 0xfffbeb, 0xfde68a},
-    [DOSE_LATER] = {0x1d4ed8, 0xeff6ff, 0xbfdbfe},
-    [DOSE_OVERDUE] = {0xb91c1c, 0xffffff, 0xfecaca},
-};
 
 static lv_obj_t *plain_obj(lv_obj_t *parent)
 {
@@ -82,10 +78,12 @@ static void build_top_line(lv_obj_t *scr)
 #else
     const lv_font_t *top_font = &inter_12_bold;
 #endif
-    s_date_label = label(row, "--- -- ---", top_font, 0x9ca3af);
-    label(row, "\u00b7", top_font, 0x4b5563);
+    s_day_label = label(row, "---", top_font, UI_T->date);
+    lv_obj_set_style_margin_right(s_day_label, 2, 0); /* row gap 8 + 2 vs a ~4px space */
+    s_date_label = label(row, "-- ---", top_font, UI_T->date);
+    label(row, "\u00b7", top_font, UI_T->caption);
 #if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
-    s_time_label = label(row, "--:--", top_font, 0xe5e7eb);
+    s_time_label = label(row, "---- hrs", top_font, UI_T->time);
 #else
     label(row, "3/5 taken", &inter_12_bold, 0xe5e7eb);
 
@@ -101,54 +99,6 @@ static void build_top_line(lv_obj_t *scr)
     lv_bar_set_range(bar, 0, 5);
     lv_bar_set_value(bar, 3, LV_ANIM_OFF);
 #endif
-}
-
-static void pulse_exec(void *obj, int32_t v)
-{
-    lv_obj_set_style_bg_opa(obj, (lv_opa_t)v, 0);
-}
-
-/* "AM ✓" for taken, "MID · next" for next, "MID · late" for the overdue next dose, else the slot */
-static const char *slot_text(int i, bool next, char *buf, size_t len)
-{
-    switch (dose_state(i)) {
-    case DOSE_TAKEN:
-        lv_snprintf(buf, len, "%s \u2713", dose_slot(i));
-        return buf;
-    case DOSE_NEXT:
-        lv_snprintf(buf, len, "%s \u00b7 next", dose_slot(i));
-        return buf;
-    case DOSE_OVERDUE:
-        if (next) {
-            lv_snprintf(buf, len, "%s \u00b7 late", dose_slot(i));
-            return buf;
-        }
-        return dose_slot(i);
-    default:
-        return dose_slot(i);
-    }
-}
-
-static lv_obj_t *pill_base(lv_obj_t *parent, int i, int32_t w, int32_t h)
-{
-    dose_state_t st = dose_state(i);
-    lv_obj_t *pill = plain_obj(parent);
-    lv_obj_set_size(pill, w, h);
-    lv_obj_set_style_radius(pill, h / 2, 0);
-    lv_obj_set_style_bg_opa(pill, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(pill, lv_color_hex(s_pill_colors[st][0]), 0);
-    if (st == DOSE_OVERDUE) {
-        lv_anim_t a;
-        lv_anim_init(&a);
-        lv_anim_set_var(&a, pill);
-        lv_anim_set_exec_cb(&a, pulse_exec);
-        lv_anim_set_values(&a, LV_OPA_COVER, 184); /* 1 -> 0.72 opacity, 1.4s cycle */
-        lv_anim_set_duration(&a, 700);
-        lv_anim_set_reverse_duration(&a, 700);
-        lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-        lv_anim_start(&a);
-    }
-    return pill;
 }
 
 static void build_doses(lv_obj_t *area);
@@ -183,8 +133,6 @@ static void untake_cb(lv_obj_t *obj, void *user_data)
 
 static void make_tappable(lv_obj_t *pill, int i, ui_tap_cb_t cb)
 {
-    lv_obj_set_style_bg_color(pill, lv_color_lighten(lv_color_hex(s_pill_colors[dose_state(i)][0]), LV_OPA_20),
-                              LV_STATE_PRESSED);
     ui_on_tap(pill, cb, (void *)(intptr_t)i);
 }
 
@@ -205,20 +153,19 @@ static void build_doses(lv_obj_t *area)
     lv_obj_set_scroll_dir(list, LV_DIR_VER);
     lv_obj_set_size(list, 320, 166);
     lv_obj_set_pos(list, 0, 32);
-    lv_obj_set_style_pad_hor(list, 8, 0);
+    lv_obj_set_style_pad_left(list, 8, 0);
+    ui_scroll_gutter(list); /* drag strip + scrollbar on the right */
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(list, 4, 0);
 
     int next = doses_next();
     lv_obj_t *next_row = NULL;
     for (int i = 0; i < doses_count(); i++) {
+        if (!dose_due_today(i)) {
+            continue; /* weekly dose, another day */
+        }
         dose_state_t st = dose_state(i);
-        const uint32_t *c = s_pill_colors[st];
-        lv_obj_t *row = pill_base(list, i, LV_PCT(100), 30);
-        lv_obj_set_style_pad_hor(row, 14, 0);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_column(row, 10, 0);
+        lv_obj_t *row = ui_dose_row(list, i, true, i == next);
         if (st == DOSE_TAKEN) {
             make_tappable(row, i, untake_cb);
         } else if (st == DOSE_NEXT || st == DOSE_OVERDUE) {
@@ -227,20 +174,12 @@ static void build_doses(lv_obj_t *area)
         if (i == next) {
             next_row = row;
         }
-
-        char t[12];
-        dose_format_time(dose_def(i)->minute, t, sizeof(t));
-        lv_obj_set_width(label(row, t, &inter_12_semibold, c[1]), 62);
-        lv_obj_t *name = label(row, dose_name(i), &inter_12_semibold, c[1]);
-        lv_obj_set_flex_grow(name, 1);
-        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-        char buf[24];
-        label(row, slot_text(i, i == next, buf, sizeof(buf)), &inter_11_semibold, c[2]);
     }
     if (next_row) {
         lv_obj_update_layout(list);
         lv_obj_scroll_to_view(next_row, LV_ANIM_OFF);
     }
+    ui_scroll_gutter_update(list);
 }
 
 #else
@@ -262,7 +201,7 @@ static void build_doses(lv_obj_t *area)
     bool next_found = false;
     for (int i = 0; i < doses_count(); i++) {
         dose_state_t st = dose_state(i);
-        lv_obj_t *pill = pill_base(circle, i, 104, 20);
+        lv_obj_t *pill = ui_dose_pill(circle, i, 104, 20, true);
         bool next = !next_found && st != DOSE_TAKEN;
         if (next) {
             next_found = true;
@@ -271,11 +210,11 @@ static void build_doses(lv_obj_t *area)
         lv_obj_set_style_pad_hor(pill, 9, 0);
         lv_obj_set_flex_flow(pill, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(pill, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_t *name = label(pill, dose_name(i), &inter_10_semibold, s_pill_colors[st][1]);
+        lv_obj_t *name = label(pill, dose_name(i), &inter_10_semibold, ui_dose_name_color(i));
         lv_obj_set_flex_grow(name, 1);
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         char buf[24];
-        label(pill, slot_text(i, next, buf, sizeof(buf)), &inter_9, s_pill_colors[st][2]);
+        label(pill, ui_dose_slot_text(i, true, next, buf, sizeof(buf)), &inter_9, ui_dose_slot_color(i));
     }
 }
 #endif
@@ -298,10 +237,10 @@ static void build_bottom_row(lv_obj_t *scr)
     lv_obj_set_style_border_width(status, 1, 0);
     lv_obj_set_style_border_opa(status, LV_OPA_40, 0);
     lv_obj_set_style_border_color(status, lv_color_hex(tint), 0);
-    label(status, s_nodes_synced ? "3 nodes synced" : "Nodes not synced", &inter_11_semibold, 0x9ca3af);
+    label(status, s_nodes_synced ? "3 nodes synced" : "Nodes not synced", &inter_11_semibold, UI_T->muted);
     lv_obj_align(status, LV_ALIGN_BOTTOM_MID, 0, -18);
 
-    lv_obj_t *ver = label(scr, fw_version_short(), &inter_8, 0x6b7280);
+    lv_obj_t *ver = label(scr, fw_version_short(), &inter_8, UI_T->caption);
     lv_obj_align(ver, LV_ALIGN_BOTTOM_MID, 0, -4);
 
     lv_obj_t *gear = plain_obj(scr);
@@ -309,17 +248,17 @@ static void build_bottom_row(lv_obj_t *scr)
     lv_obj_set_pos(gear, 276, 202);
     lv_obj_set_style_radius(gear, 10, 0);
     lv_obj_set_style_bg_opa(gear, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(gear, lv_color_hex(0x171920), 0);
-    lv_obj_set_style_bg_color(gear, lv_color_hex(0x2a2e38), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(gear, lv_color_hex(UI_T->btn_bg), 0);
+    lv_obj_set_style_bg_color(gear, lv_color_hex(UI_T->btn_pressed), LV_STATE_PRESSED);
     lv_obj_set_style_border_width(gear, 1, 0);
-    lv_obj_set_style_border_color(gear, lv_color_hex(0x2e333d), 0);
+    lv_obj_set_style_border_color(gear, lv_color_hex(UI_T->btn_border), 0);
     flex_center(gear, LV_FLEX_FLOW_COLUMN, 0);
     lv_obj_set_ext_click_area(gear, 4); /* 36px drawn, 44px touch target */
     ui_on_tap(gear, settings_cb, NULL);
 
     lv_obj_t *img = lv_image_create(gear);
     lv_image_set_src(img, &icon_settings);
-    lv_obj_set_style_image_recolor(img, lv_color_hex(0xd1d5db), 0);
+    lv_obj_set_style_image_recolor(img, lv_color_hex(UI_T->text2), 0);
     lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
 }
 
@@ -341,17 +280,17 @@ static void build_reset_button(lv_obj_t *scr)
     lv_obj_set_pos(btn, 8, 202);
     lv_obj_set_style_radius(btn, 10, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0x171920), 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a2e38), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(UI_T->btn_bg), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(UI_T->btn_pressed), LV_STATE_PRESSED);
     lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_border_color(btn, lv_color_hex(0x7c2d12), 0); /* dev-only: orange edge */
+    lv_obj_set_style_border_color(btn, lv_color_hex(UI_T->dev_border), 0); /* dev-only: orange edge */
     flex_center(btn, LV_FLEX_FLOW_COLUMN, 0);
     lv_obj_set_ext_click_area(btn, 4);
     ui_on_tap(btn, reset_cb, NULL);
 
     lv_obj_t *img = lv_image_create(btn);
     lv_image_set_src(img, &icon_reset);
-    lv_obj_set_style_image_recolor(img, lv_color_hex(0xfdba74), 0);
+    lv_obj_set_style_image_recolor(img, lv_color_hex(UI_T->dev_icon), 0);
     lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
 }
 #endif
@@ -379,22 +318,23 @@ static void clock_timer_cb(lv_timer_t *t)
     static const char *const days[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
     static const char *const months[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
                                          "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
-    lv_label_set_text_fmt(s_date_label, "%s %d %s", days[tm.tm_wday], tm.tm_mday, months[tm.tm_mon]);
-    int hour12 = tm.tm_hour % 12 == 0 ? 12 : tm.tm_hour % 12;
+    lv_label_set_text(s_day_label, days[tm.tm_wday]);
+    lv_label_set_text_fmt(s_date_label, "%d %s", tm.tm_mday, months[tm.tm_mon]);
 #if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
-    lv_label_set_text_fmt(s_time_label, "%d:%02d %s", hour12, tm.tm_min, tm.tm_hour < 12 ? "AM" : "PM");
+    lv_label_set_text_fmt(s_time_label, "%02d%02d hrs", tm.tm_hour, tm.tm_min); /* 24 h, military style */
 #else
-    lv_label_set_text_fmt(s_time_label, "TODAY · %d:%02d %s", hour12, tm.tm_min, tm.tm_hour < 12 ? "AM" : "PM");
+    lv_label_set_text_fmt(s_time_label, "TODAY · %02d%02d", tm.tm_hour, tm.tm_min);
 #endif
 }
 
-void ui_home_create(lv_obj_t *scr)
+static lv_obj_t *s_screen;
+
+static void build(lv_obj_t *scr)
 {
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_bg_color(scr, lv_color_hex(0x0b0c0f), 0);
+    lv_obj_set_style_bg_color(scr, lv_color_hex(UI_T->bg), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
-    doses_init();
     build_top_line(scr);
     /* Transparent, non-clickable area in screen coordinates, so pill positions stay absolute */
     s_dose_area = plain_obj(scr);
@@ -404,8 +344,22 @@ void ui_home_create(lv_obj_t *scr)
 #if CONFIG_MEDREMINDER_DEV_TOOLS
     build_reset_button(scr);
 #endif
+}
 
+void ui_home_create(lv_obj_t *scr)
+{
+    s_screen = scr;
+    doses_init();
+    build(scr);
     lv_timer_create(clock_timer_cb, 1000, NULL);
+    clock_timer_cb(NULL);
+}
+
+void ui_home_restyle(void)
+{
+    lv_obj_clean(s_screen);
+    build(s_screen);
+    s_last_minute = -1; /* redraw the new clock labels */
     clock_timer_cb(NULL);
 }
 

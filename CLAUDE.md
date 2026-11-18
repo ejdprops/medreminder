@@ -167,12 +167,15 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
 - Design: claude.ai artifact "MedReminder Round Display UI", artboard
   **"C5 2.8in rectangular"** (renamed from "Living room — C5 2.8in": the device may move rooms and
   more units may go elsewhere, so artboard and code names are location-neutral). Landscape 320×240:
-  top line date + live time, 16px bold ("MON 16 NOV · 12:58 PM"). Doses: a scrollable "today"
-  list (y 32-198, five rows fit), one pill-colored row each (30px high, radius 15; taken green,
-  next amber, later blue, overdue red pulsing): time, name, period ("MID · next" / "· late" /
-  "AM ✓"), scrolled to the next dose. Tap a next/overdue row to take it, a taken row to undo;
-  later rows ignore taps. Chosen after testing over the earlier rotating pills (big next dose in
-  the center, four small around it; in git history at v0.4.0). Boot splash: Averak Labs logo for
+  white background (Settings > Dark mode switches every page, see 7c.5). Top line 16px bold:
+  weekday + date deep blue, 24 h time deep green ("TUE  17 NOV · 1312 hrs"). Doses: a scrollable
+  "today" list (y 32-198, five rows fit), one solid row per dose in the dose's own color (30px
+  high, radius 15; `main/ui_dose_row.c`): time ("0600"), name, period (+ weekday for weekly
+  doses), all 14px; dark text on light colors. State: "· next", "· late", "Taken" (16px) + "✓",
+  overdue pulses with a red border. Scrolled to the next dose; scrollbar gutter on the right.
+  Tap a next/overdue row to take it, a taken row to undo; later rows ignore taps. Chosen after
+  testing over the earlier rotating pills (in git history at v0.4.0). Boot splash: Averak Labs
+  logo (cyberpunk recolor) for
   5 s (`SPLASH_MS` in `main/ui.c`), then a fade to home. No corner tiles
   (the old package/garage/lights/door tiles were removed; icons are in git history). Bottom:
   node-sync status centered with a faint green (synced) / red outline instead of a dot, version
@@ -202,7 +205,7 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
       (`main/ui_home.c`); internal RAM unchanged (62.9KB idle, min 29.5KB).
     - 7b.3 (done) project fonts: Inter 4.1 (OFL) via `tools/gen_fonts.sh <Inter ttf dir>` (Node `npx
       lv_font_conv@1.5.3`, Node from Homebrew) -> `main/fonts/` (committed). Sizes/weights from the
-      design: 8, 9 regular; 9, 10, 11, 12, 16, 23 semibold; 12, 16 bold. Glyphs: ASCII + "·" + "✓" only; add
+      design: 8, 9 regular; 9, 10, 11, 12, 14, 16, 23 semibold; 12, 16 bold. Glyphs: ASCII + "·" + "✓" only; add
       ranges in the script for new characters. Built-in Montserrat: only LVGL's default 14 left.
     - 7b.4 (done) settings page (`main/ui_settings.c`): Matter QR + manual code generated on the
       device (`main/matter_info.cpp`, takes the CHIP stack lock), hidden behind "Show setup code"
@@ -273,8 +276,27 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
         pills were tried and rejected: hard to read.)
       - One-line LVGL text areas jitter if the box is even 1px shorter than border + padding +
         font line height (it scrolls as the cursor blinks).
-  - **7d** (later) background images from SD (JPEG via esp_new_jpeg into PSRAM; SD shares the LCD SPI
-    bus, so load once) or from `storage`.
+    - 7c.5 dose colors, weekly doses, themes, 24 h:
+      - Per-dose color from 12 (`dose_colors`, index saved per dose, append only; picker in
+        spectrum order `dose_color_order`), 3x4 swatches in the editor + a live sample in the
+        header. Rows are solid (an opacity option was tried and removed; `opacity` stays in the
+        struct for the saved layout).
+      - Weekly doses: `days` bitmask (Daily or one weekday roller); only shown/alerted on their
+        day; same person + same time allowed on different days. Schedule NVS key `sched2`
+        (`dose_def_t` with color/opacity/days, 32 bytes); old `sched` is migrated on load.
+      - Light/dark theme (`main/ui_theme.c`, NVS `ui`/`dark`, light default): every screen takes
+        colors from `UI_T`; the Settings switch rebuilds home in place (`ui_home_restyle`), drops
+        cached Doses/About screens and rebuilds Settings, no reboot.
+      - 24 h military time everywhere ("0600"; clock "1312 hrs"); editor hour roller 00-23.
+      - Scrollbar gutter (`main/ui_scroll.c`): 32px touch strip right of the list with a track +
+        thumb; touch jumps/drags (down = down), so scrolling there never takes a dose. Lists
+        stop before it. LVGL list padding is not touchable (plain objects aren't clickable), so a
+        padding-only gutter did nothing.
+      - Rows have one font size (per-row auto-fit looked uneven). A label with LONG_DOT needs a
+        fixed height or it wraps instead of truncating.
+      - Logo: `tools/cyber_logo.py` recolors `averak_labs_neon.png` -> `averak_labs_cyber.png`
+        (yellow AVERAK, glowing magenta strokes); About shows it in a dark tile.
+
 - Licensing: Waveshare code is Apache-2.0. Keep headers on copied files and list them in a
   `THIRD_PARTY_LICENSES` file. `esp_xiaozhi` has its own license; don't copy it.
 

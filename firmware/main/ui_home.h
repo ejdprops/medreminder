@@ -10,6 +10,9 @@ extern "C" {
  * Call with the display lock held. Content is placeholder data for now. */
 void ui_home_create(lv_obj_t *scr);
 
+/* Theme changed: rebuild the home screen in place */
+void ui_home_restyle(void);
+
 #ifdef __cplusplus
 }
 #endif

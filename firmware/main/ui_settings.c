@@ -15,7 +15,9 @@
 #include "matter_info.h"
 #include "ui_about.h"
 #include "ui_doses.h"
+#include "ui_home.h"
 #include "ui_tap.h"
+#include "ui_theme.h"
 
 #if __has_include("bsp/esp-bsp.h")
 #include "bsp/esp-bsp.h"
@@ -55,7 +57,7 @@ static lv_obj_t *label(lv_obj_t *parent, const char *text, const lv_font_t *font
 
 static lv_obj_t *caption(lv_obj_t *parent, const char *text, int32_t x, int32_t y)
 {
-    lv_obj_t *l = label(parent, text, &inter_8, 0x6b7280);
+    lv_obj_t *l = label(parent, text, &inter_8, UI_T->caption);
     lv_obj_set_style_text_letter_space(l, 1, 0);
     lv_obj_set_pos(l, x, y);
     return l;
@@ -95,12 +97,12 @@ static void refresh_status(void)
     }
     if (n == 0) {
         lv_label_set_text(s_status_label, "Not paired");
-        lv_obj_set_style_text_color(s_status_label, lv_color_hex(0xfbbf24), 0);
+        lv_obj_set_style_text_color(s_status_label, lv_color_hex(UI_T->warn), 0);
         s_code_revealed = false;
     } else {
         lv_label_set_text_fmt(s_status_label, "%s · %d fabric%s", apple ? "Apple Home" : "Paired", n,
                               n == 1 ? "" : "s");
-        lv_obj_set_style_text_color(s_status_label, lv_color_hex(0x4ade80), 0);
+        lv_obj_set_style_text_color(s_status_label, lv_color_hex(UI_T->ok), 0);
     }
     update_code_visibility(n > 0);
     ESP_LOGI(TAG, "pairing: %d fabric(s)%s", n, apple ? ", Apple Home" : "");
@@ -179,13 +181,13 @@ static lv_obj_t *slider(lv_obj_t *parent, int32_t y, int32_t min, int32_t max, i
     lv_slider_set_value(s, value, LV_ANIM_OFF);
     lv_obj_set_style_radius(s, 3, 0);
     lv_obj_set_style_bg_opa(s, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(s, lv_color_hex(0x23262e), 0);
+    lv_obj_set_style_bg_color(s, lv_color_hex(UI_T->track), 0);
     lv_obj_set_style_radius(s, 3, LV_PART_INDICATOR);
     lv_obj_set_style_bg_opa(s, LV_OPA_COVER, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(s, lv_color_hex(0x9ca3af), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(s, lv_color_hex(UI_T->indicator), LV_PART_INDICATOR);
     lv_obj_set_style_radius(s, LV_RADIUS_CIRCLE, LV_PART_KNOB);
     lv_obj_set_style_bg_opa(s, LV_OPA_COVER, LV_PART_KNOB);
-    lv_obj_set_style_bg_color(s, lv_color_hex(0xe5e7eb), LV_PART_KNOB);
+    lv_obj_set_style_bg_color(s, lv_color_hex(UI_T->knob), LV_PART_KNOB);
     lv_obj_set_style_pad_all(s, 6, LV_PART_KNOB); /* 18px knob */
     lv_obj_set_style_opa(s, LV_OPA_40, LV_STATE_DISABLED);
     lv_obj_set_ext_click_area(s, 14); /* 6px track, ~34px touch band */
@@ -194,7 +196,7 @@ static lv_obj_t *slider(lv_obj_t *parent, int32_t y, int32_t min, int32_t max, i
 
 static void build_qr_card(lv_obj_t *scr)
 {
-    s_qr_card = card(scr, 0xffffff, 0xffffff);
+    s_qr_card = card(scr, 0xffffff, 0xd1d5db);
     char qr[128] = "";
     if (!matter_get_qr_code(qr, sizeof(qr))) {
         ESP_LOGE(TAG, "QR code unavailable");
@@ -210,35 +212,53 @@ static void build_qr_card(lv_obj_t *scr)
 
 static void build_paired_card(lv_obj_t *scr)
 {
-    s_paired_card = card(scr, 0x101217, 0x1c1f26);
+    s_paired_card = card(scr, UI_T->card, UI_T->card_border);
     lv_obj_set_flex_flow(s_paired_card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(s_paired_card, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_gap(s_paired_card, 6, 0);
 
-    label(s_paired_card, "✓ Paired", &inter_12_bold, 0x4ade80);
-    lv_obj_t *hint = label(s_paired_card, "Setup code hidden", &inter_9, 0x6b7280);
+    label(s_paired_card, "✓ Paired", &inter_12_bold, UI_T->ok);
+    lv_obj_t *hint = label(s_paired_card, "Setup code hidden", &inter_9, UI_T->caption);
     lv_obj_set_style_margin_bottom(hint, 6, 0);
 
     lv_obj_t *btn = plain_obj(s_paired_card);
     lv_obj_set_size(btn, 112, 30);
     lv_obj_set_style_radius(btn, 8, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0x171920), 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a2e38), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(UI_T->btn_bg), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(UI_T->btn_pressed), LV_STATE_PRESSED);
     lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_border_color(btn, lv_color_hex(0x2e333d), 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(UI_T->btn_border), 0);
     lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(btn, 7); /* 44px tall touch target */
     ui_on_tap(btn, reveal_cb, NULL);
-    lv_obj_t *t = label(btn, "Show setup code", &inter_10_semibold, 0xd1d5db);
+    lv_obj_t *t = label(btn, "Show setup code", &inter_10_semibold, UI_T->text2);
     lv_obj_center(t);
+}
+
+static void build(void);
+
+/* Dark mode switch: save, rebuild home in place, drop cached screens, rebuild this one */
+static void dark_mode_cb(lv_event_t *e)
+{
+    ui_theme_set_dark(lv_obj_has_state(lv_event_get_target_obj(e), LV_STATE_CHECKED));
+    ui_home_restyle();
+    ui_doses_invalidate();
+    ui_about_invalidate();
+    lv_obj_t *old = s_screen;
+    build();
+    s_last_fabrics = -1;
+    refresh_status();
+    lv_screen_load(s_screen);
+    lv_obj_delete_async(old); /* we are inside its switch's event */
+    audio_play(AUDIO_CLICK);
 }
 
 static void build(void)
 {
     s_screen = lv_obj_create(NULL);
     lv_obj_remove_flag(s_screen, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_style_bg_color(s_screen, lv_color_hex(0x0b0c0f), 0);
+    lv_obj_set_style_bg_color(s_screen, lv_color_hex(UI_T->bg), 0);
     lv_obj_set_style_bg_opa(s_screen, LV_OPA_COVER, 0);
 
     /* Header: back + title */
@@ -247,20 +267,20 @@ static void build(void)
     lv_obj_set_pos(back, 8, 6);
     lv_obj_set_style_radius(back, 10, 0);
     lv_obj_set_style_bg_opa(back, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(back, lv_color_hex(0x171920), 0);
-    lv_obj_set_style_bg_color(back, lv_color_hex(0x2a2e38), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(back, lv_color_hex(UI_T->btn_bg), 0);
+    lv_obj_set_style_bg_color(back, lv_color_hex(UI_T->btn_pressed), LV_STATE_PRESSED);
     lv_obj_set_style_border_width(back, 1, 0);
-    lv_obj_set_style_border_color(back, lv_color_hex(0x2e333d), 0);
+    lv_obj_set_style_border_color(back, lv_color_hex(UI_T->btn_border), 0);
     lv_obj_add_flag(back, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(back, 4);
     ui_on_tap(back, back_cb, NULL);
     lv_obj_t *chev = lv_image_create(back);
     lv_image_set_src(chev, &icon_chevron_left);
-    lv_obj_set_style_image_recolor(chev, lv_color_hex(0xd1d5db), 0);
+    lv_obj_set_style_image_recolor(chev, lv_color_hex(UI_T->text2), 0);
     lv_obj_set_style_image_recolor_opa(chev, LV_OPA_COVER, 0);
     lv_obj_center(chev);
 
-    lv_obj_t *title = label(s_screen, "Settings", &inter_12_bold, 0xe5e7eb);
+    lv_obj_t *title = label(s_screen, "Settings", &inter_12_bold, UI_T->text);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 54, 17);
 
     /* Header right: Doses, About */
@@ -269,26 +289,26 @@ static void build(void)
     lv_obj_set_pos(doses, 160, 6);
     lv_obj_set_style_radius(doses, 10, 0);
     lv_obj_set_style_bg_opa(doses, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(doses, lv_color_hex(0x171920), 0);
-    lv_obj_set_style_bg_color(doses, lv_color_hex(0x2a2e38), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(doses, lv_color_hex(UI_T->btn_bg), 0);
+    lv_obj_set_style_bg_color(doses, lv_color_hex(UI_T->btn_pressed), LV_STATE_PRESSED);
     lv_obj_set_style_border_width(doses, 1, 0);
-    lv_obj_set_style_border_color(doses, lv_color_hex(0x2e333d), 0);
+    lv_obj_set_style_border_color(doses, lv_color_hex(UI_T->btn_border), 0);
     lv_obj_set_ext_click_area(doses, 4);
     ui_on_tap(doses, doses_cb, NULL);
-    lv_obj_center(label(doses, "Doses", &inter_11_semibold, 0xd1d5db));
+    lv_obj_center(label(doses, "Doses", &inter_11_semibold, UI_T->text2));
 
     lv_obj_t *about = plain_obj(s_screen);
     lv_obj_set_size(about, 72, 36);
     lv_obj_set_pos(about, 240, 6);
     lv_obj_set_style_radius(about, 10, 0);
     lv_obj_set_style_bg_opa(about, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(about, lv_color_hex(0x171920), 0);
-    lv_obj_set_style_bg_color(about, lv_color_hex(0x2a2e38), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_color(about, lv_color_hex(UI_T->btn_bg), 0);
+    lv_obj_set_style_bg_color(about, lv_color_hex(UI_T->btn_pressed), LV_STATE_PRESSED);
     lv_obj_set_style_border_width(about, 1, 0);
-    lv_obj_set_style_border_color(about, lv_color_hex(0x2e333d), 0);
+    lv_obj_set_style_border_color(about, lv_color_hex(UI_T->btn_border), 0);
     lv_obj_set_ext_click_area(about, 4);
     ui_on_tap(about, about_cb, NULL);
-    lv_obj_center(label(about, "About", &inter_11_semibold, 0xd1d5db));
+    lv_obj_center(label(about, "About", &inter_11_semibold, UI_T->text2));
 
     /* Left: setup code */
     build_qr_card(s_screen);
@@ -297,21 +317,21 @@ static void build(void)
     if (matter_get_manual_code(manual, sizeof(manual)) && strlen(manual) == 11) {
         char fmt[16];
         snprintf(fmt, sizeof(fmt), "%.4s-%.3s-%.4s", manual, manual + 4, manual + 7);
-        s_code_label = label(s_screen, fmt, &inter_12_bold, 0xe5e7eb);
+        s_code_label = label(s_screen, fmt, &inter_12_bold, UI_T->text);
     } else {
-        s_code_label = label(s_screen, manual, &inter_12_bold, 0xe5e7eb);
+        s_code_label = label(s_screen, manual, &inter_12_bold, UI_T->text);
     }
     lv_obj_set_pos(s_code_label, 0, 190);
     lv_obj_set_width(s_code_label, 156);
     lv_obj_set_style_text_align(s_code_label, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_t *code_cap = label(s_screen, "Matter setup code", &inter_9, 0x6b7280);
+    lv_obj_t *code_cap = label(s_screen, "Matter setup code", &inter_9, UI_T->caption);
     lv_obj_set_pos(code_cap, 0, 208);
     lv_obj_set_width(code_cap, 156);
     lv_obj_set_style_text_align(code_cap, LV_TEXT_ALIGN_CENTER, 0);
 
     /* Right: status and sliders */
     caption(s_screen, "PAIRING", 166, 52);
-    s_status_label = label(s_screen, "", &inter_11_semibold, 0x9ca3af);
+    s_status_label = label(s_screen, "", &inter_11_semibold, UI_T->muted);
     lv_obj_set_pos(s_status_label, 166, 66);
 
     caption(s_screen, "BRIGHTNESS", 166, 104);
@@ -328,8 +348,21 @@ static void build(void)
     lv_obj_t *v = slider(s_screen, 182, 0, 100, audio_get_volume());
     lv_obj_add_event_cb(v, volume_cb, LV_EVENT_RELEASED, NULL);
 
-    lv_obj_t *ver = label(s_screen, fw_version_short(), &inter_8, 0x6b7280);
-    lv_obj_align(ver, LV_ALIGN_BOTTOM_RIGHT, -8, -6);
+    caption(s_screen, "DARK MODE", 166, 214);
+    lv_obj_t *sw = lv_switch_create(s_screen);
+    lv_obj_set_size(sw, 40, 22);
+    lv_obj_set_pos(sw, 262, 206);
+    lv_obj_set_ext_click_area(sw, 8);
+    lv_obj_set_style_bg_color(sw, lv_color_hex(UI_T->track), 0);
+    lv_obj_set_style_bg_color(sw, lv_color_hex(0x1d4ed8), LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(sw, lv_color_hex(0xffffff), LV_PART_KNOB);
+    if (ui_theme_is_dark()) {
+        lv_obj_add_state(sw, LV_STATE_CHECKED);
+    }
+    lv_obj_add_event_cb(sw, dark_mode_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    lv_obj_t *ver = label(s_screen, fw_version_short(), &inter_8, UI_T->caption);
+    lv_obj_align(ver, LV_ALIGN_BOTTOM_LEFT, 8, -6);
 }
 
 void ui_settings_open(void)

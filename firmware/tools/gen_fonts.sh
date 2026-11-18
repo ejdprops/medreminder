@@ -19,6 +19,7 @@ FONTS=(
     "11 SemiBold inter_11_semibold"
     "12 SemiBold inter_12_semibold"
     "12 Bold inter_12_bold"
+    "14 SemiBold inter_14_semibold"
     "16 SemiBold inter_16_semibold"
     "16 Bold inter_16_bold"
     "23 SemiBold inter_23_semibold"
