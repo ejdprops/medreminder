@@ -276,7 +276,7 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
         pills were tried and rejected: hard to read.)
       - One-line LVGL text areas jitter if the box is even 1px shorter than border + padding +
         font line height (it scrolls as the cursor blinks).
-    - 7c.5 dose colors, weekly doses, themes, 24 h:
+    - 7c.5 (done, v0.6.0) dose colors, weekly doses, themes, 24 h:
       - Per-dose color from 12 (`dose_colors`, index saved per dose, append only; picker in
         spectrum order `dose_color_order`), 3x4 swatches in the editor + a live sample in the
         header. Rows are solid (an opacity option was tried and removed; `opacity` stays in the
