@@ -235,8 +235,7 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
         I2S DMA buffer, so push `DMA_FLUSH_MS` of silence before muting.
       - Audio must start from the BSP init task (`ui.c` calls `audio_start()` after display start):
         BSP init functions are not thread-safe.
-      - **TODO:** try different tones for the click and for the alert (current: click 2kHz
-        decaying 25ms; alert/preview C6-E6-G6 1047/1319/1568Hz, 70% level) and pick by ear. First
+      - Tones: click 2kHz decaying 25ms; alert/preview C6-E6-G6 1047/1319/1568Hz, 70% level. First
         click after idle lags ~0.2s (amp start).
     - 7c.2 (done, v0.4.0) overdue alerts (`main/doses.c`): placeholder schedule Evan AM 6:00, Karen AM
       9:00, MID 13:30, PM 19:00, BED 21:00. Overdue 30 min after the time: pill red + pulsing,
@@ -264,8 +263,8 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
     - 7c.4 (done, v0.5.0) dose schedule editing + undo. Settings > Doses (`main/ui_doses.c`): scrollable list
       (time, name, period), tap a row to edit, "+ Add"; edit screen has name (LVGL keyboard),
       period AM/MID/PM/BED, hour/5-min/AM-PM rollers, Save, Delete (tap twice). Up to 16 doses
-      (`DOSE_MAX`), saved as an NVS blob (`doses`/`sched`), sorted by time; the old hardcoded
-      schedule is the default until one is saved (future: defaults for new setups). Rule: one
+      (`DOSE_MAX`), saved as an NVS blob (`doses`/`sched`), sorted by time. New setup (nothing
+      saved): defaults "Dose" AM 7:00, MID 12:00, PM 18:00, BED 21:00. Rule: one
       person can't have two doses at the same time (`doses_set` returns the error shown).
       Editing keeps today's taken flags on unchanged doses.
       - Home: tap the UR (most recently taken) pill to undo. More than 5 doses: the pills are

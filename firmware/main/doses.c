@@ -1,5 +1,5 @@
 /* Dose schedule and state. The schedule (name, period, time; up to DOSE_MAX, sorted by time) is
- * edited on the device and saved in NVS; until one is saved, the default schedule below is used.
+ * edited on the device and saved in NVS; until one is saved, the defaults below are used.
  * Taken doses are saved in NVS with the date, so a reboot doesn't forget them (or invite a
  * double dose); everything resets at midnight. A dose not taken OVERDUE_MIN after its time turns
  * overdue: the alert chime plays then and every ALERT_REPEAT_MIN until no dose is overdue. */
@@ -38,13 +38,12 @@ static const char *TAG = "doses";
 
 const char *const dose_periods[DOSE_PERIOD_COUNT] = {"AM", "MID", "PM", "BED"};
 
-/* Development schedule, used until one is saved. Eventually: defaults for new setups. */
+/* Defaults for a new setup (nothing saved yet), one per period; rename/edit on the device */
 static const dose_def_t s_default_schedule[] = {
-    {"Evan", "AM", 6 * 60},
-    {"Karen", "AM", 9 * 60},
-    {"Karen", "MID", 13 * 60 + 30},
-    {"Karen", "PM", 19 * 60},
-    {"Karen", "BED", 21 * 60},
+    {"Dose", "AM", 7 * 60},
+    {"Dose", "MID", 12 * 60},
+    {"Dose", "PM", 18 * 60},
+    {"Dose", "BED", 21 * 60},
 };
 
 static dose_def_t s_defs[DOSE_MAX];
@@ -101,7 +100,13 @@ static void save_schedule(void)
         ESP_LOGE(TAG, "NVS open failed");
         return;
     }
-    nvs_set_blob(nvs, NVS_KEY_SCHEDULE, s_defs, s_count * sizeof(dose_def_t));
+    /* NVS rejects a zero-length blob: store one zeroed byte for "every dose deleted" */
+    static const uint8_t empty = 0;
+    if (s_count > 0) {
+        nvs_set_blob(nvs, NVS_KEY_SCHEDULE, s_defs, s_count * sizeof(dose_def_t));
+    } else {
+        nvs_set_blob(nvs, NVS_KEY_SCHEDULE, &empty, 1);
+    }
     nvs_set_u32(nvs, NVS_KEY_TAKEN, s_taken);
     nvs_commit(nvs);
     nvs_close(nvs);
@@ -160,16 +165,18 @@ void doses_init(void)
 {
     nvs_handle_t nvs;
     size_t len = sizeof(s_defs);
+    bool saved = false; /* an empty saved schedule (every dose deleted) stays empty */
     s_count = 0;
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
         nvs_get_u32(nvs, NVS_KEY_DATE, &s_date);
         nvs_get_u32(nvs, NVS_KEY_TAKEN, &s_taken);
-        if (nvs_get_blob(nvs, NVS_KEY_SCHEDULE, s_defs, &len) == ESP_OK && len % sizeof(dose_def_t) == 0) {
-            s_count = len / sizeof(dose_def_t);
+        if (nvs_get_blob(nvs, NVS_KEY_SCHEDULE, s_defs, &len) == ESP_OK) {
+            s_count = len % sizeof(dose_def_t) == 0 ? len / sizeof(dose_def_t) : 0; /* 1 byte: empty */
+            saved = true;
         }
         nvs_close(nvs);
     }
-    if (s_count == 0) {
+    if (!saved) {
         s_count = sizeof(s_default_schedule) / sizeof(s_default_schedule[0]);
         memcpy(s_defs, s_default_schedule, sizeof(s_default_schedule));
         ESP_LOGI(TAG, "no saved schedule: using the default %d doses", s_count);
