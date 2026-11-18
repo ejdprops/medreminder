@@ -167,12 +167,13 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
 - Design: claude.ai artifact "MedReminder Round Display UI", artboard
   **"C5 2.8in rectangular"** (renamed from "Living room — C5 2.8in": the device may move rooms and
   more units may go elsewhere, so artboard and code names are location-neutral). Landscape 320×240:
-  top line date + live time, 16px bold ("MON 16 NOV · 8:58 PM"). Dose pills (taken green, next
-  amber, later blue, overdue red pulsing), text centered: the next dose large in the center
-  (153×58 at 83,86; 23/16px; tap marks it taken), the other four small around it (89×33 at
-  x 27/204, y 45/152, 8px from the center pill; 12/9px), following the day clockwise: UL taken two ago, UR most recently
-  taken, LR after next, LL after that; taking a dose rotates all pills one step; tapping UR undoes it. More than five
-  doses: a scrollable list of today's doses instead. No corner tiles
+  top line date + live time, 16px bold ("MON 16 NOV · 12:58 PM"). Doses: a scrollable "today"
+  list (y 32-198, five rows fit), one pill-colored row each (30px high, radius 15; taken green,
+  next amber, later blue, overdue red pulsing): time, name, period ("MID · next" / "· late" /
+  "AM ✓"), scrolled to the next dose. Tap a next/overdue row to take it, a taken row to undo;
+  later rows ignore taps. Chosen after testing over the earlier rotating pills (big next dose in
+  the center, four small around it; in git history at v0.4.0). Boot splash: Averak Labs logo for
+  5 s (`SPLASH_MS` in `main/ui.c`), then a fade to home. No corner tiles
   (the old package/garage/lights/door tiles were removed; icons are in git history). Bottom:
   node-sync status centered with a faint green (synced) / red outline instead of a dot, version
   centered below it, **settings gear** far right (36px drawn, 44px touch area), dev reset button

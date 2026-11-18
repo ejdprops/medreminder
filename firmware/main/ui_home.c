@@ -1,10 +1,9 @@
 /* Home screen, 320x240 landscape. Date + time on top; at the bottom node sync status and the
  * firmware version centered, settings gear right, dev reset button left. Doses per
  * CONFIG_MEDREMINDER_UI_LAYOUT:
- *   RECT (C5 board): up to five doses: the next dose large in the center (tap to mark taken), four
- *     small pills around it following the day clockwise: UL = taken two ago, UR = most recently
- *     taken (tap to undo), LR = after next, LL = after that. Taking a dose rotates every pill one
- *     step. More than five: a scrollable list of today's doses instead (build_today_list).
+ *   RECT (C5 board): a scrollable list of today's doses, one pill-colored row each, scrolled to
+ *     the next dose; tap to take or undo. (The earlier rotating-pill layout is in git history,
+ *     v0.4.0.)
  *   ROUND: date + progress on top and the day's pills listed in a 168px circle. */
 #if __has_include("lvgl.h") /* boards without a display build no UI */
 #include "ui_home.h"
@@ -196,71 +195,10 @@ static void make_takeable(lv_obj_t *pill, int i)
 }
 
 #if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
-/* Next dose large in the center (153x58); the others small (89x33) around it, between the top
- * line (y 0-30) and the status row (y 200-240). */
-typedef struct {
-    int32_t w, h;
-    const lv_font_t *name_font, *slot_font;
-} pill_size_t;
-
-static const pill_size_t s_center_size = {153, 58, &inter_23_semibold, &inter_16_semibold};
-static const pill_size_t s_corner_size = {89, 33, &inter_12_semibold, &inter_9_semibold};
-
-/* Pill position by offset from the next dose (-2..+2), clockwise from upper left */
-static const struct {
-    int offset;
-    int32_t x, y;
-} s_positions[] = {
-    {0, 83, 86},    /* center: next */
-    {-1, 204, 45},  /* upper right: most recently taken */
-    {1, 204, 152},  /* lower right: after next */
-    {2, 27, 152},   /* lower left */
-    {-2, 27, 45},   /* upper left: taken two ago */
-};
-
-static lv_obj_t *build_pill(lv_obj_t *area, int i, bool next, const pill_size_t *sz, int32_t x, int32_t y)
-{
-    const uint32_t *c = s_pill_colors[dose_state(i)];
-    lv_obj_t *pill = pill_base(area, i, sz->w, sz->h);
-    lv_obj_set_pos(pill, x, y);
-    lv_obj_set_style_pad_hor(pill, sz->h / 3, 0);
-    flex_center(pill, LV_FLEX_FLOW_COLUMN, 0);
-
-    lv_obj_t *name = label(pill, dose_name(i), sz->name_font, c[1]);
-    lv_obj_set_width(name, LV_PCT(100));
-    lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-    char buf[24];
-    label(pill, slot_text(i, next, buf, sizeof(buf)), sz->slot_font, c[2]);
-    return pill;
-}
-
-#define POSITION_COUNT ((int)(sizeof(s_positions) / sizeof(s_positions[0])))
-
-/* Up to five doses: the rotating pills */
-static void build_pills(lv_obj_t *area)
-{
-    /* Next = first dose not yet taken; if all are taken, the cycle starts over at the first */
-    int next = doses_next();
-    int count = doses_count();
-    /* Fill center, then the nearest offsets, so fewer than five doses never repeat a pill */
-    for (int p = 0; p < POSITION_COUNT && p < count; p++) {
-        int i = ((next + s_positions[p].offset) % count + count) % count;
-        bool center = s_positions[p].offset == 0;
-        lv_obj_t *pill = build_pill(area, i, center, center ? &s_center_size : &s_corner_size,
-                                    s_positions[p].x, s_positions[p].y);
-        if (center) {
-            make_takeable(pill, i);
-        } else if (s_positions[p].offset == -1 && dose_taken(i)) {
-            make_tappable(pill, i, untake_cb); /* most recently taken: tap to undo */
-        }
-    }
-}
-
-/* More than five: today's doses as a scrollable list of pill-colored rows (time, name, period),
- * scrolled to the next dose. Tap a pending/overdue row to take it, a taken row to undo it; later
+/* Today's doses as a scrollable list of pill-colored rows (time, name, period), scrolled to the
+ * next dose; five rows fit. Tap a pending/overdue row to take it, a taken row to undo it; later
  * doses don't react, so a stray tap can't mark one early. */
-static void build_today_list(lv_obj_t *area)
+static void build_doses(lv_obj_t *area)
 {
     lv_obj_t *list = plain_obj(area);
     lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
@@ -305,14 +243,6 @@ static void build_today_list(lv_obj_t *area)
     }
 }
 
-static void build_doses(lv_obj_t *area)
-{
-    if (doses_count() > POSITION_COUNT) {
-        build_today_list(area);
-    } else {
-        build_pills(area);
-    }
-}
 #else
 /* Round screens: the day's pills inside a 168px circle with a TODAY/time header */
 static void build_doses(lv_obj_t *area)

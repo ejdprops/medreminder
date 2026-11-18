@@ -10,7 +10,30 @@ static const char *TAG = "ui";
 
 #if __has_include("bsp/esp-bsp.h")
 #include "bsp/esp-bsp.h"
+#include "images/images.h"
 #include "ui_home.h"
+
+#define SPLASH_MS 5000
+
+/* Boot splash: the Averak Labs logo on its own background, then a fade to the home screen (built
+ * behind it meanwhile). The splash deletes itself with the load. */
+static void splash_done_cb(lv_timer_t *t)
+{
+    lv_screen_load_anim(lv_timer_get_user_data(t), LV_SCREEN_LOAD_ANIM_FADE_IN, 300, 0, true);
+}
+
+static void show_splash_then(lv_obj_t *home)
+{
+    lv_obj_t *splash = lv_screen_active();
+    lv_obj_remove_flag(splash, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(splash, lv_color_hex(0x0b0d14), 0); /* the logo's background */
+    lv_obj_set_style_bg_opa(splash, LV_OPA_COVER, 0);
+    lv_obj_t *logo = lv_image_create(splash);
+    lv_image_set_src(logo, &img_averak_logo);
+    lv_obj_center(logo);
+    lv_timer_t *t = lv_timer_create(splash_done_cb, SPLASH_MS, home);
+    lv_timer_set_repeat_count(t, 1);
+}
 
 static void ui_init_task(void *arg)
 {
@@ -25,7 +48,9 @@ static void ui_init_task(void *arg)
         ESP_LOGE(TAG, "display start failed");
     } else {
         if (bsp_display_lock(UINT32_MAX)) {
-            ui_home_create(lv_screen_active());
+            lv_obj_t *home = lv_obj_create(NULL);
+            ui_home_create(home);
+            show_splash_then(home);
             bsp_display_unlock();
         }
         esp_err_t err = bsp_display_show();
