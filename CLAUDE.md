@@ -261,7 +261,7 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
       (C5: "Averak Labs" / "Pill Reminder Rect"; a round board would use "Pill Reminder Round").
       Changing it rebuilds Matter (~20 min). Apple Home may need the accessory re-added to show
       new names.
-    - 7c.4 dose schedule editing + undo. Settings > Doses (`main/ui_doses.c`): scrollable list
+    - 7c.4 (done, v0.5.0) dose schedule editing + undo. Settings > Doses (`main/ui_doses.c`): scrollable list
       (time, name, period), tap a row to edit, "+ Add"; edit screen has name (LVGL keyboard),
       period AM/MID/PM/BED, hour/5-min/AM-PM rollers, Save, Delete (tap twice). Up to 16 doses
       (`DOSE_MAX`), saved as an NVS blob (`doses`/`sched`), sorted by time; the old hardcoded
