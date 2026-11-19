@@ -19,6 +19,7 @@
 #include <log_heap_numbers.h>
 
 #include <app_priv.h>
+#include <matter_dev.h>
 #include <ui.h>
 #include <fw_version.h>
 #include <time_sync.h>
@@ -52,7 +53,6 @@ static void log_heap(const char *state)
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 }
-uint16_t light_endpoint_id = 0;
 
 using namespace esp_matter;
 using namespace esp_matter::attribute;
@@ -160,24 +160,20 @@ static esp_err_t app_identification_cb(identification::callback_type_t type, uin
                                        uint8_t effect_variant, void *priv_data)
 {
     ESP_LOGI(TAG, "Identification callback: type: %u, effect: %u, variant: %u", type, effect_id, effect_variant);
+    if (type == identification::START) {
+        matter_dev_identify(endpoint_id);
+    }
     return ESP_OK;
 }
 
-// This callback is called for every attribute update. The callback implementation shall
-// handle the desired attributes and return an appropriate error code. If the attribute
-// is not of your interest, please do not return an error code and strictly return ESP_OK.
+// Called for every attribute update. Home switching a dose on/off takes or undoes it (matter_dev).
 static esp_err_t app_attribute_update_cb(attribute::callback_type_t type, uint16_t endpoint_id, uint32_t cluster_id,
                                          uint32_t attribute_id, esp_matter_attr_val_t *val, void *priv_data)
 {
-    esp_err_t err = ESP_OK;
-
     if (type == PRE_UPDATE) {
-        /* Driver update */
-        app_driver_handle_t driver_handle = (app_driver_handle_t)priv_data;
-        err = app_driver_attribute_update(driver_handle, endpoint_id, cluster_id, attribute_id, val);
+        return matter_dev_attribute_update(endpoint_id, cluster_id, attribute_id, val, priv_data);
     }
-
-    return err;
+    return ESP_OK;
 }
 
 extern "C" void app_main()
@@ -193,7 +189,6 @@ extern "C" void app_main()
     MEMORY_PROFILER_DUMP_HEAP_STAT("Bootup");
 
     /* Initialize driver */
-    app_driver_handle_t light_handle = app_driver_light_init();
     app_driver_handle_t button_handle = app_driver_button_init();
     app_reset_button_register(button_handle);
 
@@ -206,33 +201,8 @@ extern "C" void app_main()
 
     MEMORY_PROFILER_DUMP_HEAP_STAT("node created");
 
-    extended_color_light::config_t light_config;
-    light_config.on_off.on_off = DEFAULT_POWER;
-    light_config.on_off_lighting.start_up_on_off = nullptr;
-    light_config.level_control.current_level = DEFAULT_BRIGHTNESS;
-    light_config.level_control.on_level = DEFAULT_BRIGHTNESS;
-    light_config.level_control_lighting.start_up_current_level = DEFAULT_BRIGHTNESS;
-    light_config.color_control.color_mode = (uint8_t)ColorControl::ColorMode::kColorTemperature;
-    light_config.color_control.enhanced_color_mode = (uint8_t)ColorControl::ColorMode::kColorTemperature;
-    light_config.color_control_color_temperature.start_up_color_temperature_mireds = nullptr;
-
-    // endpoint handles can be used to add/modify clusters.
-    endpoint_t *endpoint = extended_color_light::create(node, &light_config, ENDPOINT_FLAG_NONE, light_handle);
-    ABORT_APP_ON_FAILURE(endpoint != nullptr, ESP_LOGE(TAG, "Failed to create extended color light endpoint"));
-
-    light_endpoint_id = endpoint::get_id(endpoint);
-    ESP_LOGI(TAG, "Light created with endpoint_id %d", light_endpoint_id);
-
-    /* Mark deferred persistence for some attributes that might be changed rapidly */
-    attribute_t *current_level_attribute = attribute::get(light_endpoint_id, LevelControl::Id, LevelControl::Attributes::CurrentLevel::Id);
-    attribute::set_deferred_persistence(current_level_attribute);
-
-    attribute_t *current_x_attribute = attribute::get(light_endpoint_id, ColorControl::Id, ColorControl::Attributes::CurrentX::Id);
-    attribute::set_deferred_persistence(current_x_attribute);
-    attribute_t *current_y_attribute = attribute::get(light_endpoint_id, ColorControl::Id, ColorControl::Attributes::CurrentY::Id);
-    attribute::set_deferred_persistence(current_y_attribute);
-    attribute_t *color_temp_attribute = attribute::get(light_endpoint_id, ColorControl::Id, ColorControl::Attributes::ColorTemperatureMireds::Id);
-    attribute::set_deferred_persistence(color_temp_attribute);
+    /* Bridge: aggregator now; the bridged dose/overdue endpoints come back after start */
+    matter_dev_create(node);
 
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD && CHIP_DEVICE_CONFIG_ENABLE_WIFI_STATION
     // Enable secondary network interface
@@ -268,8 +238,7 @@ extern "C" void app_main()
     MEMORY_PROFILER_DUMP_HEAP_STAT("matter started");
     log_heap("matter started");
 
-    /* Starting driver with default values */
-    app_driver_light_set_defaults(light_endpoint_id);
+    matter_dev_start();
 
     time_sync_start();
     ui_start();

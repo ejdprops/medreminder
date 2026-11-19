@@ -1,5 +1,6 @@
-/* Settings screen, 320x240: Matter setup code (QR + manual), pairing status, brightness, alert volume.
- * Same dark style as the home screen (no design artboard for this page yet). */
+/* Settings screen, 320x240 (design "MenuSettings"): pairing status in the header, Matter setup code
+ * (QR + manual) on the left, setting buttons and two vertical sliders (brightness, alert volume) on
+ * the right. Doses and About open from the home menu. */
 #if __has_include("lvgl.h") /* boards without a display build no UI */
 #include "ui_settings.h"
 
@@ -12,10 +13,12 @@
 #include "fonts/fonts.h"
 #include "fw_version.h"
 #include "icons/icons.h"
+#include "doses.h"
 #include "matter_info.h"
 #include "ui_about.h"
 #include "ui_doses.h"
 #include "ui_home.h"
+#include "ui_sleep.h"
 #include "ui_tap.h"
 #include "ui_theme.h"
 
@@ -127,22 +130,6 @@ static void back_cb(lv_obj_t *obj, void *user_data)
     ESP_LOGI(TAG, "back");
 }
 
-static void doses_cb(lv_obj_t *obj, void *user_data)
-{
-    (void)obj;
-    (void)user_data;
-    ui_doses_open();
-    audio_play(AUDIO_CLICK);
-}
-
-static void about_cb(lv_obj_t *obj, void *user_data)
-{
-    (void)obj;
-    (void)user_data;
-    ui_about_open();
-    audio_play(AUDIO_CLICK);
-}
-
 static void reveal_cb(lv_obj_t *obj, void *user_data)
 {
     (void)obj;
@@ -151,6 +138,13 @@ static void reveal_cb(lv_obj_t *obj, void *user_data)
     update_code_visibility(true);
     audio_play(AUDIO_CLICK);
     ESP_LOGI(TAG, "setup code revealed");
+}
+
+/* Percentage under a slider, live while dragging */
+static void value_label_cb(lv_event_t *e)
+{
+    lv_label_set_text_fmt(lv_event_get_user_data(e), "%d%%",
+                          (int)lv_slider_get_value(lv_event_get_target_obj(e)));
 }
 
 static void brightness_cb(lv_event_t *e)
@@ -171,12 +165,24 @@ static void volume_cb(lv_event_t *e)
     audio_play(AUDIO_PREVIEW);
 }
 
-static lv_obj_t *slider(lv_obj_t *parent, int32_t y, int32_t min, int32_t max, int32_t value)
+/* Vertical slider column, 34px wide from x: icon on top, 132px track (drag up = more), value below */
+#define VSLIDER_W 34
+#define VSLIDER_TRACK_Y 74
+#define VSLIDER_TRACK_H 132
+
+static lv_obj_t *slider(lv_obj_t *parent, int32_t x, const lv_image_dsc_t *icon, int32_t min, int32_t max,
+                        int32_t value)
 {
+    lv_obj_t *img = lv_image_create(parent);
+    lv_image_set_src(img, icon);
+    lv_obj_set_style_image_recolor(img, lv_color_hex(UI_T->text2), 0);
+    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
+    lv_obj_set_pos(img, x + (VSLIDER_W - icon->header.w) / 2, 48);
+
     lv_obj_t *s = lv_slider_create(parent);
     lv_obj_remove_style_all(s);
-    lv_obj_set_size(s, 136, 6);
-    lv_obj_set_pos(s, 166, y);
+    lv_obj_set_size(s, 6, VSLIDER_TRACK_H); /* taller than wide: LVGL makes it vertical */
+    lv_obj_set_pos(s, x + (VSLIDER_W - 6) / 2, VSLIDER_TRACK_Y);
     lv_slider_set_range(s, min, max);
     lv_slider_set_value(s, value, LV_ANIM_OFF);
     lv_obj_set_style_radius(s, 3, 0);
@@ -188,10 +194,76 @@ static lv_obj_t *slider(lv_obj_t *parent, int32_t y, int32_t min, int32_t max, i
     lv_obj_set_style_radius(s, LV_RADIUS_CIRCLE, LV_PART_KNOB);
     lv_obj_set_style_bg_opa(s, LV_OPA_COVER, LV_PART_KNOB);
     lv_obj_set_style_bg_color(s, lv_color_hex(UI_T->knob), LV_PART_KNOB);
-    lv_obj_set_style_pad_all(s, 6, LV_PART_KNOB); /* 18px knob */
+    lv_obj_set_style_pad_all(s, 7, LV_PART_KNOB); /* 20px knob */
     lv_obj_set_style_opa(s, LV_OPA_40, LV_STATE_DISABLED);
-    lv_obj_set_ext_click_area(s, 14); /* 6px track, ~34px touch band */
+    lv_obj_set_ext_click_area(s, (VSLIDER_W - 6) / 2); /* the whole 34px column */
+
+    lv_obj_t *val = label(parent, "", &inter_9, UI_T->muted);
+    lv_label_set_text_fmt(val, "%d%%", (int)value);
+    lv_obj_set_width(val, VSLIDER_W);
+    lv_obj_set_style_text_align(val, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(val, x, VSLIDER_TRACK_Y + VSLIDER_TRACK_H + 8);
+    lv_obj_add_event_cb(s, value_label_cb, LV_EVENT_VALUE_CHANGED, val);
     return s;
+}
+
+/* Tap-to-cycle setting: a button showing the value; each tap moves to the next choice */
+typedef struct {
+    const int *values;
+    int count;
+    int (*get)(void);
+    void (*set)(int);
+} cycle_t;
+
+static const int s_sleep_values[] = {1, 2, 5, 10, 15, 30, 60, 0}; /* 0 = never */
+static const int s_overdue_values[] = {5, 10, 15, 20, 30, 45, 60, 90, 120};
+static const cycle_t s_sleep_cycle = {s_sleep_values, 8, ui_sleep_minutes, ui_sleep_set_minutes};
+static const cycle_t s_overdue_cycle = {s_overdue_values, 9, doses_overdue_min, doses_set_overdue_min};
+
+static void cycle_text(lv_obj_t *btn, int v)
+{
+    lv_obj_t *l = lv_obj_get_child(btn, 0);
+    if (v == 0) {
+        lv_label_set_text(l, "Never");
+    } else {
+        lv_label_set_text_fmt(l, "%d min", v);
+    }
+}
+
+static void cycle_cb(lv_obj_t *obj, void *user_data)
+{
+    const cycle_t *c = user_data;
+    int cur = c->get();
+    int next = c->values[0];
+    for (int i = 0; i < c->count; i++) {
+        if (c->values[i] == cur) {
+            next = c->values[(i + 1) % c->count];
+            break;
+        }
+    }
+    c->set(next);
+    cycle_text(obj, next);
+    audio_play(AUDIO_CLICK);
+}
+
+/* Caption above a 74x30 button */
+static void cycle_row(lv_obj_t *parent, const char *cap, int32_t y, const cycle_t *c)
+{
+    caption(parent, cap, 166, y - 12);
+    lv_obj_t *btn = plain_obj(parent);
+    lv_obj_set_size(btn, 74, 30);
+    lv_obj_set_pos(btn, 166, y);
+    lv_obj_set_style_radius(btn, 8, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(UI_T->btn_bg), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(UI_T->btn_pressed), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(UI_T->btn_border), 0);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(btn, 3);
+    lv_obj_center(label(btn, "", &inter_11_semibold, UI_T->text2));
+    cycle_text(btn, c->get());
+    ui_on_tap(btn, cycle_cb, (void *)c);
 }
 
 static void build_qr_card(lv_obj_t *scr)
@@ -283,32 +355,10 @@ static void build(void)
     lv_obj_t *title = label(s_screen, "Settings", &inter_12_bold, UI_T->text);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 54, 17);
 
-    /* Header right: Doses, About */
-    lv_obj_t *doses = plain_obj(s_screen);
-    lv_obj_set_size(doses, 72, 36);
-    lv_obj_set_pos(doses, 160, 6);
-    lv_obj_set_style_radius(doses, 10, 0);
-    lv_obj_set_style_bg_opa(doses, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(doses, lv_color_hex(UI_T->btn_bg), 0);
-    lv_obj_set_style_bg_color(doses, lv_color_hex(UI_T->btn_pressed), LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(doses, 1, 0);
-    lv_obj_set_style_border_color(doses, lv_color_hex(UI_T->btn_border), 0);
-    lv_obj_set_ext_click_area(doses, 4);
-    ui_on_tap(doses, doses_cb, NULL);
-    lv_obj_center(label(doses, "Doses", &inter_11_semibold, UI_T->text2));
-
-    lv_obj_t *about = plain_obj(s_screen);
-    lv_obj_set_size(about, 72, 36);
-    lv_obj_set_pos(about, 240, 6);
-    lv_obj_set_style_radius(about, 10, 0);
-    lv_obj_set_style_bg_opa(about, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(about, lv_color_hex(UI_T->btn_bg), 0);
-    lv_obj_set_style_bg_color(about, lv_color_hex(UI_T->btn_pressed), LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(about, 1, 0);
-    lv_obj_set_style_border_color(about, lv_color_hex(UI_T->btn_border), 0);
-    lv_obj_set_ext_click_area(about, 4);
-    ui_on_tap(about, about_cb, NULL);
-    lv_obj_center(label(about, "About", &inter_11_semibold, UI_T->text2));
+    /* Header right: pairing status */
+    caption(s_screen, "PAIRING", 166, 9);
+    s_status_label = label(s_screen, "", &inter_11_semibold, UI_T->muted);
+    lv_obj_set_pos(s_status_label, 166, 21);
 
     /* Left: setup code */
     build_qr_card(s_screen);
@@ -329,29 +379,14 @@ static void build(void)
     lv_obj_set_width(code_cap, 156);
     lv_obj_set_style_text_align(code_cap, LV_TEXT_ALIGN_CENTER, 0);
 
-    /* Right: status and sliders */
-    caption(s_screen, "PAIRING", 166, 52);
-    s_status_label = label(s_screen, "", &inter_11_semibold, UI_T->muted);
-    lv_obj_set_pos(s_status_label, 166, 66);
+    /* Right: settings on the left of the column, sliders on the right */
+    cycle_row(s_screen, "SCREEN OFF", 64, &s_sleep_cycle);
+    cycle_row(s_screen, "OVERDUE AFTER", 118, &s_overdue_cycle);
 
-    caption(s_screen, "BRIGHTNESS", 166, 104);
-#ifdef HAVE_BACKLIGHT
-    int brightness = bsp_display_brightness_get();
-#else
-    int brightness = 100;
-#endif
-    lv_obj_t *b = slider(s_screen, 126, 10, 100, brightness);
-    lv_obj_add_event_cb(b, brightness_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    lv_obj_add_event_cb(b, brightness_cb, LV_EVENT_RELEASED, NULL);
-
-    caption(s_screen, "ALERT VOLUME", 166, 160);
-    lv_obj_t *v = slider(s_screen, 182, 0, 100, audio_get_volume());
-    lv_obj_add_event_cb(v, volume_cb, LV_EVENT_RELEASED, NULL);
-
-    caption(s_screen, "DARK MODE", 166, 214);
+    caption(s_screen, "DARK MODE", 166, 166);
     lv_obj_t *sw = lv_switch_create(s_screen);
     lv_obj_set_size(sw, 40, 22);
-    lv_obj_set_pos(sw, 262, 206);
+    lv_obj_set_pos(sw, 166, 178);
     lv_obj_set_ext_click_area(sw, 8);
     lv_obj_set_style_bg_color(sw, lv_color_hex(UI_T->track), 0);
     lv_obj_set_style_bg_color(sw, lv_color_hex(0x1d4ed8), LV_PART_INDICATOR | LV_STATE_CHECKED);
@@ -360,6 +395,18 @@ static void build(void)
         lv_obj_add_state(sw, LV_STATE_CHECKED);
     }
     lv_obj_add_event_cb(sw, dark_mode_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+#ifdef HAVE_BACKLIGHT
+    int brightness = bsp_display_brightness_get();
+#else
+    int brightness = 100;
+#endif
+    lv_obj_t *b = slider(s_screen, 245, &icon_sun, 10, 100, brightness);
+    lv_obj_add_event_cb(b, brightness_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(b, brightness_cb, LV_EVENT_RELEASED, NULL);
+
+    lv_obj_t *v = slider(s_screen, 279, &icon_volume, 0, 100, audio_get_volume());
+    lv_obj_add_event_cb(v, volume_cb, LV_EVENT_RELEASED, NULL);
 
     lv_obj_t *ver = label(s_screen, fw_version_short(), &inter_8, UI_T->caption);
     lv_obj_align(ver, LV_ALIGN_BOTTOM_LEFT, 8, -6);

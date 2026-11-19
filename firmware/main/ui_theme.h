@@ -20,8 +20,7 @@ typedef struct {
     uint32_t track, indicator, knob; /* sliders */
     uint32_t ok, warn, error;
     uint32_t del_border, del_text;
-    uint32_t date, time;  /* home top line */
-    uint32_t dev_border, dev_icon; /* dev reset button */
+    uint32_t date, time;  /* home clock */
 } ui_theme_t;
 
 #define UI_T (ui_theme())

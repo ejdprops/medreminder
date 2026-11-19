@@ -14,7 +14,6 @@ static const ui_theme_t s_light = {
     .ok = 0x15803d, .warn = 0xb45309, .error = 0xdc2626,
     .del_border = 0xfca5a5, .del_text = 0xb91c1c,
     .date = 0x1e3a8a, .time = 0x166534,
-    .dev_border = 0xfdba74, .dev_icon = 0xea580c,
 };
 
 static const ui_theme_t s_dark = {
@@ -25,7 +24,6 @@ static const ui_theme_t s_dark = {
     .ok = 0x4ade80, .warn = 0xfbbf24, .error = 0xf87171,
     .del_border = 0x7f1d1d, .del_text = 0xfca5a5,
     .date = 0x93c5fd, .time = 0x86efac,
-    .dev_border = 0x7c2d12, .dev_icon = 0xfdba74,
 };
 
 static bool s_dark_mode;

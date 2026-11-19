@@ -1,13 +1,16 @@
-/* Home screen, 320x240 landscape. Date + time on top; at the bottom node sync status and the
- * firmware version centered, settings gear right, dev reset button left. Doses per
- * CONFIG_MEDREMINDER_UI_LAYOUT:
- *   RECT (C5 board): a scrollable list of today's doses, one pill-colored row each, scrolled to
- *     the next dose; tap to take or undo. (The earlier rotating-pill layout is in git history,
- *     v0.4.0.)
- *   ROUND: date + progress on top and the day's pills listed in a 168px circle. */
+/* Home screen, 320x240 landscape, per CONFIG_MEDREMINDER_UI_LAYOUT:
+ *   RECT (C5 board; design artboards "B (menu)"): a centered date · time banner on top with the
+ *     menu button (Doses, Settings, About) in the top-right corner. Below it on the left, today's
+ *     doses as a compact list (display only; hold a taken row 1 s to undo it), with up/down arrows
+ *     to page it when more than 5 are due; fewer rows grow to fill the height (otherwise the list takes their space); on the right,
+ *     the next dose as a big card, the same height as the list: the one tap target, it marks the
+ *     dose taken. For 10 s after a take an Undo strip sits under the card. Node sync status and
+ *     the version centered along the bottom.
+ *   ROUND: date + progress on top and the day's pills listed in a 168px circle; settings gear. */
 #if __has_include("lvgl.h") /* boards without a display build no UI */
 #include "ui_home.h"
 
+#include <stdio.h>
 #include <string.h>
 #include <time.h>
 
@@ -19,18 +22,21 @@
 #include "fw_version.h"
 #include "icons/icons.h"
 #include "time_sync.h"
+#include "ui_about.h"
 #include "ui_dose_row.h"
-#include "ui_scroll.h"
+#include "ui_doses.h"
 #include "ui_tap.h"
 #include "ui_theme.h"
 #include "ui_settings.h"
 
 static const char *TAG = "ui_home";
 
+#if !CONFIG_MEDREMINDER_UI_LAYOUT_RECT
 static lv_obj_t *s_day_label; /* weekday, its own label for a wider gap before the date */
+#endif
 static lv_obj_t *s_date_label;
 static lv_obj_t *s_time_label;
-static lv_obj_t *s_dose_area; /* holds the pills; rebuilt when a dose is taken */
+static lv_obj_t *s_dose_area; /* everything that shows doses; rebuilt when they change */
 static int s_last_minute = -1; /* clock labels last drawn for this minute */
 
 static lv_obj_t *plain_obj(lv_obj_t *parent)
@@ -57,6 +63,653 @@ static void flex_center(lv_obj_t *o, lv_flex_flow_t flow, int32_t gap)
     lv_obj_set_style_pad_gap(o, gap, 0);
 }
 
+/* Rounded gray button with a centered icon, like the Settings header buttons */
+static lv_obj_t *icon_button(lv_obj_t *parent, const lv_image_dsc_t *icon, int32_t x, int32_t y, int32_t w,
+                             int32_t h)
+{
+    lv_obj_t *b = plain_obj(parent);
+    lv_obj_set_size(b, w, h);
+    lv_obj_set_pos(b, x, y);
+    lv_obj_set_style_radius(b, 10, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(UI_T->btn_bg), 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(UI_T->btn_pressed), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_border_color(b, lv_color_hex(UI_T->btn_border), 0);
+    lv_obj_set_style_opa(b, LV_OPA_40, LV_STATE_DISABLED);
+    flex_center(b, LV_FLEX_FLOW_COLUMN, 0);
+    lv_obj_t *img = lv_image_create(b);
+    lv_image_set_src(img, icon);
+    lv_obj_set_style_image_recolor(img, lv_color_hex(UI_T->text2), 0);
+    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
+    return b;
+}
+
+static void build_doses(lv_obj_t *area);
+
+static void rebuild_doses(void *arg)
+{
+    (void)arg;
+    lv_obj_clean(s_dose_area);
+    build_doses(s_dose_area);
+    s_last_minute = -1; /* the round layout's time label was recreated */
+}
+
+#if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
+
+#define ARROW_X 6
+#define ARROW_W 28
+#define LIST_X 38
+#define BANNER_H 40 /* date · time, centered on the menu button */
+#define LIST_Y 42
+#define LIST_W 145
+#define LIST_ROWS 5 /* 5 x 28px rows + 4 x 4px gaps = 156px, to y 198; fewer rows grow to fill it */
+#define LIST_GAP 4
+#define LIST_H (LIST_ROWS * UI_DOSE_LIST_ROW_H + (LIST_ROWS - 1) * LIST_GAP)
+#define COL_X 189 /* right column: the card */
+#define COL_W 123
+#define CARD_Y LIST_Y
+#define CARD_H LIST_H /* level with the list, above the sync status */
+#define UNDO_H 56
+#define UNDO_GAP 4
+#define UNDO_MS 10000
+#define UNDO_AMBER 0xfbbf24
+#define UNDO_AMBER_TEXT 0x111827
+#define OVERDUE_BORDER 0xef4444
+#define HOLD_UNDO_MS 1000
+
+static int s_today[DOSE_MAX]; /* indices of the doses due today, in time order */
+static int s_today_n;
+static int s_top; /* first row shown in the list */
+static lv_obj_t *s_list, *s_up, *s_down;
+static uint8_t s_undo_uid; /* last dose taken on the card, while its Undo strip shows; 0 = none */
+static uint32_t s_undo_at;
+static lv_timer_t *s_undo_timer;
+static lv_obj_t *s_late_label; /* "Late 12 min" on the card, updated every minute */
+static int s_card_dose = -1;
+static lv_timer_t *s_hold_timer;
+static lv_obj_t *s_menu;
+static lv_obj_t *s_confirm;
+
+static void collect_today(void)
+{
+    s_today_n = 0;
+    for (int i = 0; i < doses_count(); i++) {
+        if (dose_due_today(i)) {
+            s_today[s_today_n++] = i;
+        }
+    }
+}
+
+static int max_top(void)
+{
+    return s_today_n > LIST_ROWS ? s_today_n - LIST_ROWS : 0;
+}
+
+/* Page the list so the next dose shows, two rows down when there are rows above it; with none
+ * left, the end of the day */
+static void snap_to_next(void)
+{
+    int next = doses_next();
+    int pos = s_today_n;
+    for (int k = 0; k < s_today_n; k++) {
+        if (s_today[k] == next) {
+            pos = k;
+        }
+    }
+    s_top = LV_CLAMP(0, pos - 2, max_top());
+}
+
+static void refresh(bool snap)
+{
+    collect_today();
+    if (snap) {
+        snap_to_next();
+    }
+    rebuild_doses(NULL);
+}
+
+static void refresh_snap_async(void *arg)
+{
+    (void)arg;
+    refresh(true);
+}
+
+/* ---- Undo: the strip under the card, and holding a taken row ---- */
+
+static void undo_expire_cb(lv_timer_t *t)
+{
+    (void)t;
+    s_undo_timer = NULL; /* one-shot: LVGL deletes it */
+    s_undo_uid = 0;
+    refresh(false);
+}
+
+static void undo_cancel(void)
+{
+    s_undo_uid = 0;
+    if (s_undo_timer) {
+        lv_timer_delete(s_undo_timer);
+        s_undo_timer = NULL;
+    }
+}
+
+static void untake_uid(uint8_t uid)
+{
+    int i = doses_find_uid(uid);
+    if (i >= 0 && doses_untake(i)) {
+        audio_play(AUDIO_CLICK);
+    }
+}
+
+static void undo_strip_cb(lv_obj_t *obj, void *user_data)
+{
+    (void)obj;
+    (void)user_data;
+    uint8_t uid = s_undo_uid;
+    undo_cancel();
+    untake_uid(uid);
+    lv_async_call(refresh_snap_async, NULL); /* not from inside the strip's own event */
+}
+
+static void bar_width_exec(void *obj, int32_t v)
+{
+    lv_obj_set_width(obj, v);
+}
+
+static void build_undo_strip(lv_obj_t *area, int i)
+{
+    lv_obj_t *strip = plain_obj(area);
+    lv_obj_set_size(strip, COL_W, UNDO_H);
+    lv_obj_set_pos(strip, COL_X, CARD_Y + CARD_H - UNDO_H);
+    lv_obj_set_style_radius(strip, 14, 0);
+    lv_obj_set_style_clip_corner(strip, true, 0);
+    lv_obj_set_style_bg_opa(strip, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(strip, lv_color_hex(UI_T->text), 0); /* inverted: dark on light */
+    lv_obj_set_style_pad_top(strip, 6, 0);
+    lv_obj_set_style_pad_hor(strip, 8, 0);
+    lv_obj_set_style_pad_bottom(strip, 9, 0);
+    lv_obj_set_flex_flow(strip, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(strip, 4, 0);
+    ui_on_tap(strip, undo_strip_cb, NULL);
+
+    char what[40], t[8];
+    dose_format_time(dose_def(i)->minute, t, sizeof(t));
+    snprintf(what, sizeof(what), "✓ %s %s", dose_name(i), t);
+    lv_obj_t *l = label(strip, what, &inter_12_semibold, UI_T->bg);
+    lv_obj_set_size(l, LV_PCT(100), lv_font_get_line_height(&inter_12_semibold));
+    lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+
+    lv_obj_t *btn = plain_obj(strip);
+    lv_obj_set_width(btn, LV_PCT(100));
+    lv_obj_set_flex_grow(btn, 1);
+    lv_obj_set_style_radius(btn, 8, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(UNDO_AMBER), 0);
+    lv_obj_center(label(btn, "Undo", &inter_14_semibold, UNDO_AMBER_TEXT));
+
+    /* Countdown along the bottom edge, shrinking over what's left of the 10 s */
+    uint32_t left = UNDO_MS - LV_MIN(lv_tick_elaps(s_undo_at), UNDO_MS);
+    lv_obj_t *bar = plain_obj(strip);
+    lv_obj_add_flag(bar, LV_OBJ_FLAG_IGNORE_LAYOUT);
+    lv_obj_set_size(bar, COL_W * left / UNDO_MS, 3);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(UNDO_AMBER), 0);
+    lv_obj_align(bar, LV_ALIGN_BOTTOM_LEFT, -8, 9); /* past the strip's padding, to its edge */
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, bar);
+    lv_anim_set_exec_cb(&a, bar_width_exec);
+    lv_anim_set_values(&a, COL_W * left / UNDO_MS, 0);
+    lv_anim_set_duration(&a, left);
+    lv_anim_start(&a);
+}
+
+static void confirm_close(void)
+{
+    if (s_confirm) {
+        lv_obj_delete_async(s_confirm);
+        s_confirm = NULL;
+    }
+}
+
+static void confirm_keep_cb(lv_obj_t *obj, void *user_data)
+{
+    (void)obj;
+    (void)user_data;
+    confirm_close();
+}
+
+static void confirm_undo_cb(lv_obj_t *obj, void *user_data)
+{
+    (void)obj;
+    uint8_t uid = (uint8_t)(uintptr_t)user_data;
+    confirm_close();
+    if (uid == s_undo_uid) {
+        undo_cancel();
+    }
+    untake_uid(uid);
+    lv_async_call(refresh_snap_async, NULL);
+}
+
+static lv_obj_t *dialog_button(lv_obj_t *parent, const char *text, uint32_t bg, uint32_t border, uint32_t fg)
+{
+    lv_obj_t *b = plain_obj(parent);
+    lv_obj_set_size(b, 100, 40);
+    lv_obj_set_style_radius(b, 10, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(bg), 0);
+    lv_obj_set_style_bg_color(b, lv_color_darken(lv_color_hex(bg), LV_OPA_10), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_border_color(b, lv_color_hex(border), 0);
+    lv_obj_center(label(b, text, &inter_14_semibold, fg));
+    return b;
+}
+
+/* "Mark Karen 1330 as not taken?" [Keep] [Undo], over everything */
+static void confirm_open(int i)
+{
+    confirm_close();
+    s_confirm = plain_obj(lv_layer_top());
+    lv_obj_set_size(s_confirm, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_opa(s_confirm, LV_OPA_40, 0);
+    lv_obj_set_style_bg_color(s_confirm, lv_color_black(), 0);
+    lv_obj_add_flag(s_confirm, LV_OBJ_FLAG_CLICKABLE); /* taps outside the panel go nowhere */
+
+    lv_obj_t *panel = plain_obj(s_confirm);
+    lv_obj_set_size(panel, 236, LV_SIZE_CONTENT);
+    lv_obj_center(panel);
+    lv_obj_add_flag(panel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_radius(panel, 14, 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(UI_T->bg), 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(UI_T->btn_border), 0);
+    lv_obj_set_style_pad_all(panel, 12, 0);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(panel, 12, 0);
+
+    char text[64], t[8];
+    dose_format_time(dose_def(i)->minute, t, sizeof(t));
+    snprintf(text, sizeof(text), "Mark %s %s\nas not taken?", dose_name(i), t);
+    lv_obj_t *l = label(panel, text, &inter_14_semibold, UI_T->text);
+    lv_obj_set_width(l, LV_PCT(100));
+    lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
+
+    ui_on_tap(dialog_button(panel, "Keep", UI_T->btn_bg, UI_T->btn_border, UI_T->text2), confirm_keep_cb, NULL);
+    ui_on_tap(dialog_button(panel, "Undo", UNDO_AMBER, UNDO_AMBER, UNDO_AMBER_TEXT), confirm_undo_cb,
+              (void *)(uintptr_t)dose_def(i)->uid);
+    ESP_LOGI(TAG, "undo? %s %s", dose_name(i), t);
+}
+
+static void hold_timer_cb(lv_timer_t *t)
+{
+    s_hold_timer = NULL; /* one-shot */
+    confirm_open((int)(intptr_t)lv_timer_get_user_data(t));
+}
+
+static void hold_cancel(void)
+{
+    if (s_hold_timer) {
+        lv_timer_delete(s_hold_timer);
+        s_hold_timer = NULL;
+    }
+}
+
+/* Taken rows: held HOLD_UNDO_MS, ask whether to undo */
+static void hold_event_cb(lv_event_t *e)
+{
+    switch (lv_event_get_code(e)) {
+    case LV_EVENT_PRESSED:
+        hold_cancel();
+        s_hold_timer = lv_timer_create(hold_timer_cb, HOLD_UNDO_MS, lv_event_get_user_data(e));
+        lv_timer_set_repeat_count(s_hold_timer, 1);
+        break;
+    case LV_EVENT_RELEASED:
+    case LV_EVENT_PRESS_LOST:
+    case LV_EVENT_DELETE:
+        hold_cancel();
+        break;
+    default:
+        break;
+    }
+}
+
+/* ---- The list ---- */
+
+/* Up to LIST_ROWS doses: no arrows, the list takes their space */
+static bool need_arrows(void)
+{
+    return s_today_n > LIST_ROWS;
+}
+
+static void fill_list(void)
+{
+    lv_obj_clean(s_list);
+    for (int k = s_top; k < s_today_n && k < s_top + LIST_ROWS; k++) {
+        int i = s_today[k];
+        lv_obj_t *row = ui_dose_list_row(s_list, i);
+        if (dose_state(i) == DOSE_TAKEN) {
+            lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(row, hold_event_cb, LV_EVENT_ALL, (void *)(intptr_t)i);
+        }
+    }
+    lv_obj_set_state(s_up, LV_STATE_DISABLED, s_top == 0);
+    lv_obj_set_state(s_down, LV_STATE_DISABLED, s_top >= max_top());
+}
+
+static void arrow_cb(lv_obj_t *obj, void *user_data)
+{
+    (void)obj;
+    int step = (int)(intptr_t)user_data * (LIST_ROWS - 1); /* the last row seen stays on screen */
+    int top = LV_CLAMP(0, s_top + step, max_top());
+    if (top == s_top) {
+        return;
+    }
+    s_top = top;
+    hold_cancel();
+    fill_list();
+    audio_play(AUDIO_CLICK);
+}
+
+/* ---- The card ---- */
+
+static void take_cb(lv_obj_t *obj, void *user_data)
+{
+    (void)obj;
+    int i = (int)(intptr_t)user_data;
+    if (!doses_take(i)) {
+        return;
+    }
+    audio_play(AUDIO_CLICK);
+    undo_cancel();
+    s_undo_uid = dose_def(i)->uid;
+    s_undo_at = lv_tick_get();
+    s_undo_timer = lv_timer_create(undo_expire_cb, UNDO_MS, NULL);
+    lv_timer_set_repeat_count(s_undo_timer, 1);
+    lv_async_call(refresh_snap_async, NULL); /* not from inside the card's own event */
+}
+
+static void update_late_label(void)
+{
+    if (!s_late_label || s_card_dose < 0 || !time_is_valid()) {
+        return;
+    }
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    int late = LV_MAX(0, tm.tm_hour * 60 + tm.tm_min - dose_def(s_card_dose)->minute);
+    if (late < 60) {
+        lv_label_set_text_fmt(s_late_label, "Late %d min", late);
+    } else {
+        lv_label_set_text_fmt(s_late_label, "Late %dh %02dm", late / 60, late % 60);
+    }
+}
+
+/* Name in 23px: up to max_lines lines, then "..." */
+static void card_name(lv_obj_t *card, int i, uint32_t color, int max_lines)
+{
+    const lv_font_t *font = &inter_23_semibold;
+    lv_obj_t *name = label(card, dose_name(i), font, color);
+    int32_t w = COL_W - 2 * 10;
+    lv_point_t size;
+    lv_text_get_size(&size, dose_name(i), font, 0, 0, w, LV_TEXT_FLAG_NONE);
+    lv_obj_set_size(name, w, LV_MIN(size.y, max_lines * lv_font_get_line_height(font)));
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+}
+
+/* Nothing left today: gray card, ignores taps; tomorrow's first dose */
+static void build_done_card(lv_obj_t *card)
+{
+    lv_obj_set_style_bg_color(card, lv_color_hex(UI_T->btn_bg), 0);
+    lv_obj_set_style_border_width(card, 1, 0);
+    lv_obj_set_style_border_color(card, lv_color_hex(UI_T->btn_border), 0);
+    lv_obj_t *img = lv_image_create(card);
+    lv_image_set_src(img, &icon_check_circle);
+    lv_obj_set_style_image_recolor(img, lv_color_hex(UI_T->ok), 0);
+    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
+    lv_obj_t *big = label(card, s_today_n ? "All done\ntoday" : "No doses\ntoday", &inter_16_bold, UI_T->text);
+    lv_obj_set_flex_grow(big, 1);
+    lv_obj_set_style_margin_top(big, 8, 0);
+
+    if (!time_is_valid()) {
+        return;
+    }
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    int first = doses_first_on((tm.tm_wday + 1) % 7);
+    if (first >= 0) {
+        char text[48], t[8];
+        dose_format_time(dose_def(first)->minute, t, sizeof(t));
+        snprintf(text, sizeof(text), "Tomorrow first:\n%s %s", t, dose_name(first));
+        lv_obj_t *l = label(card, text, &inter_12_semibold, UI_T->muted);
+        lv_obj_set_width(l, LV_PCT(100));
+    }
+}
+
+static void build_card(lv_obj_t *area, bool undo)
+{
+    lv_obj_t *card = plain_obj(area);
+    lv_obj_set_size(card, COL_W, undo ? CARD_H - UNDO_H - UNDO_GAP : CARD_H);
+    lv_obj_set_pos(card, COL_X, CARD_Y);
+    lv_obj_set_style_radius(card, 16, 0);
+    lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_all(card, 10, 0);
+    lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(card, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+    int i = doses_next();
+    s_card_dose = i;
+    s_late_label = NULL;
+    if (i < 0) {
+        build_done_card(card);
+        return;
+    }
+    uint32_t color = dose_colors[dose_def(i)->color];
+    uint32_t text = ui_dose_name_color(i);
+    lv_obj_set_style_bg_color(card, lv_color_hex(color), 0);
+    lv_obj_set_style_bg_color(card, lv_color_lighten(lv_color_hex(color), LV_OPA_20), LV_STATE_PRESSED);
+    bool overdue = dose_state(i) == DOSE_OVERDUE;
+    if (overdue) {
+        lv_obj_set_style_border_width(card, 3, 0);
+        lv_obj_set_style_border_color(card, lv_color_hex(OVERDUE_BORDER), 0);
+        lv_obj_set_style_pad_all(card, 7, 0);
+        ui_dose_pulse(card);
+    }
+    ui_on_tap(card, take_cb, (void *)(intptr_t)i);
+
+    char t[8];
+    dose_format_time(dose_def(i)->minute, t, sizeof(t));
+    label(card, t, &inter_16_bold, text);
+
+    /* Name (and the late badge) between the time and the hint */
+    lv_obj_t *mid = plain_obj(card);
+    lv_obj_set_size(mid, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(mid, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(mid, 4, 0);
+    card_name(mid, i, text, undo ? 1 : 2);
+    if (overdue) {
+        lv_obj_t *badge = plain_obj(mid);
+        lv_obj_set_size(badge, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_style_radius(badge, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(badge, lv_color_white(), 0);
+        lv_obj_set_style_pad_hor(badge, 6, 0);
+        lv_obj_set_style_pad_ver(badge, 2, 0);
+        s_late_label = label(badge, "Late", &inter_12_bold, 0xb91c1c);
+        update_late_label();
+    }
+
+    if (undo && overdue) {
+        return; /* no room for the hint above the Undo strip with the late badge */
+    }
+    const lv_font_t *hint_font = undo ? &inter_12_semibold : &inter_14_semibold;
+    lv_obj_t *hint = label(card, "Tap when taken", hint_font, text);
+    lv_obj_set_width(hint, LV_PCT(100));
+}
+
+/* ---- Menu (Doses, Settings, About) ---- */
+
+static void menu_close(void)
+{
+    if (s_menu) {
+        lv_obj_delete_async(s_menu); /* may be inside one of its children's events */
+        s_menu = NULL;
+    }
+}
+
+static void menu_close_cb(lv_obj_t *obj, void *user_data)
+{
+    (void)obj;
+    (void)user_data;
+    menu_close();
+    audio_play(AUDIO_CLICK);
+}
+
+static void menu_item_cb(lv_obj_t *obj, void *user_data)
+{
+    (void)obj;
+    menu_close();
+    switch ((int)(intptr_t)user_data) {
+    case 0:
+        ui_doses_open();
+        break;
+    case 1:
+        ui_settings_open();
+        break;
+    default:
+        ui_about_open();
+        break;
+    }
+    audio_play(AUDIO_CLICK);
+}
+
+static void menu_item(lv_obj_t *panel, const lv_image_dsc_t *icon, const char *text, int id, bool first)
+{
+    lv_obj_t *item = plain_obj(panel);
+    lv_obj_set_size(item, LV_PCT(100), 44);
+    lv_obj_set_style_pad_hor(item, 12, 0);
+    lv_obj_set_flex_flow(item, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(item, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(item, 10, 0);
+    lv_obj_set_style_bg_color(item, lv_color_hex(UI_T->btn_pressed), LV_STATE_PRESSED);
+    lv_obj_set_style_bg_opa(item, LV_OPA_COVER, LV_STATE_PRESSED);
+    if (!first) {
+        lv_obj_set_style_border_side(item, LV_BORDER_SIDE_TOP, 0);
+        lv_obj_set_style_border_width(item, 1, 0);
+        lv_obj_set_style_border_color(item, lv_color_hex(UI_T->btn_pressed), 0);
+    }
+    ui_on_tap(item, menu_item_cb, (void *)(intptr_t)id);
+    lv_obj_t *img = lv_image_create(item);
+    lv_image_set_src(img, icon);
+    lv_obj_set_style_image_recolor(img, lv_color_hex(UI_T->text2), 0);
+    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
+    label(item, text, &inter_14_semibold, UI_T->text);
+}
+
+/* Over everything: dims the screen; tap outside the panel or the X to close (that tap does
+ * nothing else) */
+static void menu_open_cb(lv_obj_t *obj, void *user_data)
+{
+    (void)obj;
+    (void)user_data;
+    menu_close();
+    s_menu = plain_obj(lv_layer_top());
+    lv_obj_set_size(s_menu, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_opa(s_menu, LV_OPA_40, 0);
+    lv_obj_set_style_bg_color(s_menu, lv_color_black(), 0);
+    ui_on_tap(s_menu, menu_close_cb, NULL);
+
+    lv_obj_t *x = icon_button(s_menu, &icon_close, 272, 4, 40, 32);
+    lv_obj_set_style_bg_color(x, lv_color_hex(UI_T->btn_pressed), 0);
+    lv_obj_set_ext_click_area(x, 4);
+    ui_on_tap(x, menu_close_cb, NULL);
+
+    lv_obj_t *panel = plain_obj(s_menu);
+    lv_obj_set_size(panel, 140, LV_SIZE_CONTENT);
+    lv_obj_set_pos(panel, 172, 40);
+    lv_obj_add_flag(panel, LV_OBJ_FLAG_CLICKABLE); /* a tap between items doesn't close it */
+    lv_obj_set_style_radius(panel, 12, 0);
+    lv_obj_set_style_clip_corner(panel, true, 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(UI_T->bg), 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(UI_T->btn_border), 0);
+    lv_obj_set_style_pad_ver(panel, 4, 0);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+    menu_item(panel, &icon_pill, "Doses", 0, true);
+    menu_item(panel, &icon_settings, "Settings", 1, false);
+    menu_item(panel, &icon_info, "About", 2, false);
+    audio_play(AUDIO_CLICK);
+    ESP_LOGI(TAG, "menu");
+}
+
+/* ---- Layout ---- */
+
+/* Banner centered across the top, "THU 19 NOV · 0511 hrs"; the menu button in the top-right corner */
+static void build_clock(lv_obj_t *scr)
+{
+    lv_obj_t *row = plain_obj(scr);
+    lv_obj_set_size(row, 320, BANNER_H);
+    lv_obj_set_pos(row, 0, 0);
+    flex_center(row, LV_FLEX_FLOW_ROW, 8);
+    s_date_label = label(row, "--- -- ---", &inter_16_bold, UI_T->date);
+    label(row, "\u00b7", &inter_16_bold, UI_T->caption);
+    s_time_label = label(row, "---- hrs", &inter_16_bold, UI_T->time);
+
+    lv_obj_t *menu = icon_button(scr, &icon_menu, 272, 4, 40, 32);
+    lv_obj_set_ext_click_area(menu, 4);
+    ui_on_tap(menu, menu_open_cb, NULL);
+}
+
+static void build_doses(lv_obj_t *area)
+{
+    s_up = icon_button(area, &icon_chevron_up, ARROW_X, LIST_Y, ARROW_W, LIST_H / 2 - 2);
+    ui_on_tap(s_up, arrow_cb, (void *)(intptr_t)-1);
+    s_down = icon_button(area, &icon_chevron_down, ARROW_X, LIST_Y + LIST_H / 2 + 2, ARROW_W, LIST_H / 2 - 2);
+    ui_on_tap(s_down, arrow_cb, (void *)(intptr_t)1);
+    int32_t x = LIST_X;
+    if (!need_arrows()) {
+        lv_obj_add_flag(s_up, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(s_down, LV_OBJ_FLAG_HIDDEN);
+        x = ARROW_X;
+    }
+
+    /* 2px padding all round */
+    s_list = plain_obj(area);
+    lv_obj_set_size(s_list, LIST_X + LIST_W - x + 4, LIST_H + 4);
+    lv_obj_set_pos(s_list, x - 2, LIST_Y - 2);
+    lv_obj_set_style_pad_all(s_list, 2, 0);
+    lv_obj_set_flex_flow(s_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(s_list, LIST_GAP, 0);
+    fill_list();
+
+    int undo = s_undo_uid ? doses_find_uid(s_undo_uid) : -1;
+    if (undo < 0 || !dose_taken(undo)) { /* deleted or undone elsewhere (Home) */
+        undo_cancel();
+        undo = -1;
+    }
+    build_card(area, undo >= 0);
+    if (undo >= 0) {
+        build_undo_strip(area, undo);
+    }
+}
+
+#else
+/* Round screens: the day's pills inside a 168px circle with a TODAY/time header */
+
+static void take_cb(lv_obj_t *obj, void *user_data)
+{
+    (void)obj;
+    if (!doses_take((int)(intptr_t)user_data)) {
+        return;
+    }
+    audio_play(AUDIO_CLICK);
+    lv_async_call(rebuild_doses, NULL); /* not from inside the pill's own event */
+}
+
 static void settings_cb(lv_obj_t *obj, void *user_data)
 {
     (void)obj;
@@ -73,18 +726,10 @@ static void build_top_line(lv_obj_t *scr)
     lv_obj_set_pos(row, 0, 0);
     flex_center(row, LV_FLEX_FLOW_ROW, 8);
 
-#if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
-    const lv_font_t *top_font = &inter_16_bold;
-#else
-    const lv_font_t *top_font = &inter_12_bold;
-#endif
-    s_day_label = label(row, "---", top_font, UI_T->date);
+    s_day_label = label(row, "---", &inter_12_bold, UI_T->date);
     lv_obj_set_style_margin_right(s_day_label, 2, 0); /* row gap 8 + 2 vs a ~4px space */
-    s_date_label = label(row, "-- ---", top_font, UI_T->date);
-    label(row, "\u00b7", top_font, UI_T->caption);
-#if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
-    s_time_label = label(row, "---- hrs", top_font, UI_T->time);
-#else
+    s_date_label = label(row, "-- ---", &inter_12_bold, UI_T->date);
+    label(row, "·", &inter_12_bold, UI_T->caption);
     label(row, "3/5 taken", &inter_12_bold, 0xe5e7eb);
 
     lv_obj_t *bar = lv_bar_create(row);
@@ -98,92 +743,8 @@ static void build_top_line(lv_obj_t *scr)
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x22c55e), LV_PART_INDICATOR);
     lv_bar_set_range(bar, 0, 5);
     lv_bar_set_value(bar, 3, LV_ANIM_OFF);
-#endif
 }
 
-static void build_doses(lv_obj_t *area);
-
-static void rebuild_doses(void *arg)
-{
-    (void)arg;
-    lv_obj_clean(s_dose_area);
-    build_doses(s_dose_area);
-    s_last_minute = -1; /* the round layout's time label was recreated */
-}
-
-static void take_cb(lv_obj_t *obj, void *user_data)
-{
-    (void)obj;
-    if (!doses_take((int)(intptr_t)user_data)) {
-        return;
-    }
-    audio_play(AUDIO_CLICK);
-    lv_async_call(rebuild_doses, NULL); /* not from inside the pill's own event */
-}
-
-static void untake_cb(lv_obj_t *obj, void *user_data)
-{
-    (void)obj;
-    if (!doses_untake((int)(intptr_t)user_data)) {
-        return;
-    }
-    audio_play(AUDIO_CLICK);
-    lv_async_call(rebuild_doses, NULL);
-}
-
-static void make_tappable(lv_obj_t *pill, int i, ui_tap_cb_t cb)
-{
-    ui_on_tap(pill, cb, (void *)(intptr_t)i);
-}
-
-/* The next dose's pill marks it taken on tap */
-static void make_takeable(lv_obj_t *pill, int i)
-{
-    make_tappable(pill, i, take_cb);
-}
-
-#if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
-/* Today's doses as a scrollable list of pill-colored rows (time, name, period), scrolled to the
- * next dose; five rows fit. Tap a pending/overdue row to take it, a taken row to undo it; later
- * doses don't react, so a stray tap can't mark one early. */
-static void build_doses(lv_obj_t *area)
-{
-    lv_obj_t *list = plain_obj(area);
-    lv_obj_add_flag(list, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(list, LV_DIR_VER);
-    lv_obj_set_size(list, 320, 166);
-    lv_obj_set_pos(list, 0, 32);
-    lv_obj_set_style_pad_left(list, 8, 0);
-    ui_scroll_gutter(list); /* drag strip + scrollbar on the right */
-    lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(list, 4, 0);
-
-    int next = doses_next();
-    lv_obj_t *next_row = NULL;
-    for (int i = 0; i < doses_count(); i++) {
-        if (!dose_due_today(i)) {
-            continue; /* weekly dose, another day */
-        }
-        dose_state_t st = dose_state(i);
-        lv_obj_t *row = ui_dose_row(list, i, true, i == next);
-        if (st == DOSE_TAKEN) {
-            make_tappable(row, i, untake_cb);
-        } else if (st == DOSE_NEXT || st == DOSE_OVERDUE) {
-            make_takeable(row, i);
-        }
-        if (i == next) {
-            next_row = row;
-        }
-    }
-    if (next_row) {
-        lv_obj_update_layout(list);
-        lv_obj_scroll_to_view(next_row, LV_ANIM_OFF);
-    }
-    ui_scroll_gutter_update(list);
-}
-
-#else
-/* Round screens: the day's pills inside a 168px circle with a TODAY/time header */
 static void build_doses(lv_obj_t *area)
 {
     lv_obj_t *circle = plain_obj(area);
@@ -205,7 +766,7 @@ static void build_doses(lv_obj_t *area)
         bool next = !next_found && st != DOSE_TAKEN;
         if (next) {
             next_found = true;
-            make_takeable(pill, i);
+            ui_on_tap(pill, take_cb, (void *)(intptr_t)i);
         }
         lv_obj_set_style_pad_hor(pill, 9, 0);
         lv_obj_set_flex_flow(pill, LV_FLEX_FLOW_ROW);
@@ -222,12 +783,15 @@ static void build_doses(lv_obj_t *area)
 /* Placeholder until node sync is real */
 static const bool s_nodes_synced = true;
 
-/* Bottom: node sync status centered (faint green/red outline instead of a dot), version centered
- * below it, settings gear far right (dev reset button far left). */
+/* Node sync status (faint green/red outline instead of a dot) with the version below it,
+ * centered on the screen (ROUND: with the settings gear far right) */
 static void build_bottom_row(lv_obj_t *scr)
 {
+    lv_obj_t *box = plain_obj(scr);
+    lv_obj_set_size(box, 320, 42);
+    lv_obj_set_pos(box, 0, 198);
     uint32_t tint = s_nodes_synced ? 0x22c55e : 0xef4444;
-    lv_obj_t *status = plain_obj(scr);
+    lv_obj_t *status = plain_obj(box);
     lv_obj_set_size(status, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_style_pad_hor(status, 10, 0);
     lv_obj_set_style_pad_ver(status, 3, 0);
@@ -240,60 +804,15 @@ static void build_bottom_row(lv_obj_t *scr)
     label(status, s_nodes_synced ? "3 nodes synced" : "Nodes not synced", &inter_11_semibold, UI_T->muted);
     lv_obj_align(status, LV_ALIGN_BOTTOM_MID, 0, -18);
 
-    lv_obj_t *ver = label(scr, fw_version_short(), &inter_8, UI_T->caption);
+    lv_obj_t *ver = label(box, fw_version_short(), &inter_8, UI_T->caption);
     lv_obj_align(ver, LV_ALIGN_BOTTOM_MID, 0, -4);
 
-    lv_obj_t *gear = plain_obj(scr);
-    lv_obj_set_size(gear, 36, 36);
-    lv_obj_set_pos(gear, 276, 202);
-    lv_obj_set_style_radius(gear, 10, 0);
-    lv_obj_set_style_bg_opa(gear, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(gear, lv_color_hex(UI_T->btn_bg), 0);
-    lv_obj_set_style_bg_color(gear, lv_color_hex(UI_T->btn_pressed), LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(gear, 1, 0);
-    lv_obj_set_style_border_color(gear, lv_color_hex(UI_T->btn_border), 0);
-    flex_center(gear, LV_FLEX_FLOW_COLUMN, 0);
+#if !CONFIG_MEDREMINDER_UI_LAYOUT_RECT
+    lv_obj_t *gear = icon_button(scr, &icon_settings, 276, 202, 36, 36);
     lv_obj_set_ext_click_area(gear, 4); /* 36px drawn, 44px touch target */
     ui_on_tap(gear, settings_cb, NULL);
-
-    lv_obj_t *img = lv_image_create(gear);
-    lv_image_set_src(img, &icon_settings);
-    lv_obj_set_style_image_recolor(img, lv_color_hex(UI_T->text2), 0);
-    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
-}
-
-#if CONFIG_MEDREMINDER_DEV_TOOLS
-/* Dev: mark every dose not taken (and restart the test schedule) */
-static void reset_cb(lv_obj_t *obj, void *user_data)
-{
-    (void)obj;
-    (void)user_data;
-    doses_reset();
-    audio_play(AUDIO_CLICK);
-    rebuild_doses(NULL);
-}
-
-static void build_reset_button(lv_obj_t *scr)
-{
-    lv_obj_t *btn = plain_obj(scr);
-    lv_obj_set_size(btn, 36, 36);
-    lv_obj_set_pos(btn, 8, 202);
-    lv_obj_set_style_radius(btn, 10, 0);
-    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(UI_T->btn_bg), 0);
-    lv_obj_set_style_bg_color(btn, lv_color_hex(UI_T->btn_pressed), LV_STATE_PRESSED);
-    lv_obj_set_style_border_width(btn, 1, 0);
-    lv_obj_set_style_border_color(btn, lv_color_hex(UI_T->dev_border), 0); /* dev-only: orange edge */
-    flex_center(btn, LV_FLEX_FLOW_COLUMN, 0);
-    lv_obj_set_ext_click_area(btn, 4);
-    ui_on_tap(btn, reset_cb, NULL);
-
-    lv_obj_t *img = lv_image_create(btn);
-    lv_image_set_src(img, &icon_reset);
-    lv_obj_set_style_image_recolor(img, lv_color_hex(UI_T->dev_icon), 0);
-    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
-}
 #endif
+}
 
 /* Every second: dose states and alerts, then the date and time labels (dashes until the first
  * SNTP sync) */
@@ -302,7 +821,11 @@ static void clock_timer_cb(lv_timer_t *t)
     (void)t;
     time_t now = time(NULL);
     if (doses_tick(now)) { /* also reports schedule edits before the clock is set */
+#if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
+        refresh(true);
+#else
         rebuild_doses(NULL);
+#endif
     }
     if (!time_is_valid()) {
         return;
@@ -318,11 +841,13 @@ static void clock_timer_cb(lv_timer_t *t)
     static const char *const days[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
     static const char *const months[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
                                          "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
-    lv_label_set_text(s_day_label, days[tm.tm_wday]);
-    lv_label_set_text_fmt(s_date_label, "%d %s", tm.tm_mday, months[tm.tm_mon]);
 #if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
     lv_label_set_text_fmt(s_time_label, "%02d%02d hrs", tm.tm_hour, tm.tm_min); /* 24 h, military style */
+    lv_label_set_text_fmt(s_date_label, "%s %d %s", days[tm.tm_wday], tm.tm_mday, months[tm.tm_mon]);
+    update_late_label();
 #else
+    lv_label_set_text(s_day_label, days[tm.tm_wday]);
+    lv_label_set_text_fmt(s_date_label, "%d %s", tm.tm_mday, months[tm.tm_mon]);
     lv_label_set_text_fmt(s_time_label, "TODAY · %02d%02d", tm.tm_hour, tm.tm_min);
 #endif
 }
@@ -335,15 +860,18 @@ static void build(lv_obj_t *scr)
     lv_obj_set_style_bg_color(scr, lv_color_hex(UI_T->bg), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
+#if CONFIG_MEDREMINDER_UI_LAYOUT_RECT
+    build_clock(scr);
+    collect_today();
+    snap_to_next();
+#else
     build_top_line(scr);
-    /* Transparent, non-clickable area in screen coordinates, so pill positions stay absolute */
+#endif
+    /* Transparent, non-clickable area in screen coordinates, so positions inside stay absolute */
     s_dose_area = plain_obj(scr);
-    lv_obj_set_size(s_dose_area, 320, 200);
+    lv_obj_set_size(s_dose_area, 320, 240);
     build_doses(s_dose_area);
     build_bottom_row(scr);
-#if CONFIG_MEDREMINDER_DEV_TOOLS
-    build_reset_button(scr);
-#endif
 }
 
 void ui_home_create(lv_obj_t *scr)

@@ -1,9 +1,10 @@
-/* Dose schedule screens, opened from Settings > Doses.
- *   List: every dose in time order (time, name, period), scrollable; tap a row to edit it,
+/* Dose schedule screens, opened from the home menu > Doses (designs "MenuDoses", "MenuEdit").
+ *   List: every dose in time order (time, name, weekday for weekly doses); up/down arrows on the
+ *     right page through it (no drag scrolling, so a tap is always a tap); tap a row to edit it,
  *     "+ Add" for a new one.
- *   Edit: name (on-screen keyboard), period (AM/MID/PM/BED), time (hour, minute in 5 min steps,
- *     24 h), repeat (Daily or one weekday), color (12 swatches); Save, Delete (tap twice) for an existing dose, Back
- *     cancels.
+ *   Edit: name (on-screen keyboard), time (hour, minute in 5 min steps, 24 h), repeat (Daily or one
+ *     weekday), color (6x4 swatches); Save, Delete (tap twice) for an existing dose, Back cancels.
+ *     The period isn't edited any more: it follows the time (the round layout still groups by it).
  * Validation (one time per person) lives in doses_set(); its message shows above the Delete
  * button. The home screen redraws on its next tick (doses_tick reports schedule changes). */
 #if __has_include("lvgl.h") /* boards without a display build no UI */
@@ -20,7 +21,6 @@
 #include "fonts/fonts.h"
 #include "icons/icons.h"
 #include "ui_dose_row.h"
-#include "ui_scroll.h"
 #include "ui_tap.h"
 #include "ui_theme.h"
 
@@ -32,28 +32,40 @@ static const char *TAG = "ui_doses";
 #define CARD_BORDER UI_T->btn_border
 #define SELECTED_COLOR 0x1d4ed8
 
+/* Edit screen: the color grid's top, under the sample row and its caption */
+#define COLOR_Y 114
+
 /* List screen */
+#define LIST_X 8
+#define LIST_Y 48
+#define LIST_W 268 /* to x 276; arrows at 284 */
+#define LIST_H 192
+#define LIST_STEP (5 * (UI_DOSE_ROW_H + 4)) /* rows per arrow tap */
+#define ARROW_X 284
+#define ARROW_W 28
+#define ARROW_H 91
+
 static lv_obj_t *s_list_screen;
 static lv_obj_t *s_list;
+static lv_obj_t *s_up, *s_down;
 static lv_obj_t *s_count_label;
 static lv_obj_t *s_return_to;
 
 /* Edit screen (built per edit, deleted on leaving) */
 static lv_obj_t *s_edit_screen;
 static int s_edit_index; /* -1: adding */
-static int s_period;
 static lv_obj_t *s_name_ta;
 static lv_obj_t *s_keyboard;
-static lv_obj_t *s_period_btns[DOSE_PERIOD_COUNT];
 static int s_color;
 static lv_obj_t *s_sample, *s_sample_label;
-static lv_obj_t *s_swatches[DOSE_COLOR_COUNT];
+static lv_obj_t *s_swatches[DOSE_PICKER_COUNT];
 static lv_obj_t *s_hour_roller, *s_minute_roller, *s_day_roller;
 static lv_obj_t *s_error_label;
 static lv_obj_t *s_delete_label;
 static bool s_delete_armed;
 
 static void build_rows(void);
+static const char *period_for(int minute);
 
 static lv_obj_t *plain_obj(lv_obj_t *parent)
 {
@@ -122,7 +134,6 @@ static lv_obj_t *caption(lv_obj_t *parent, const char *text, int32_t x, int32_t 
 static void close_edit(void)
 {
     build_rows();
-    ui_scroll_gutter_update(s_list);
     lv_screen_load(s_list_screen);
     lv_obj_delete_async(s_edit_screen); /* we may be inside one of its events */
     s_edit_screen = NULL;
@@ -156,10 +167,10 @@ static void save_cb(lv_obj_t *obj, void *user_data)
     for (int n = strlen(d.name); n > 0 && d.name[n - 1] == ' '; n--) {
         d.name[n - 1] = '\0';
     }
-    strlcpy(d.period, dose_periods[s_period], sizeof(d.period));
     d.color = (uint8_t)s_color;
     d.opacity = 100; /* rows are solid; the field is kept for the saved layout */
     d.minute = lv_roller_get_selected(s_hour_roller) * 60 + lv_roller_get_selected(s_minute_roller) * 5;
+    strlcpy(d.period, period_for(d.minute), sizeof(d.period));
     int day = lv_roller_get_selected(s_day_roller); /* 0 = Daily, 1..7 = Sun..Sat */
     d.days = day == 0 ? DOSE_DAILY : (uint8_t)(1u << (day - 1));
 
@@ -186,6 +197,18 @@ static void delete_cb(lv_obj_t *obj, void *user_data)
     audio_play(AUDIO_CLICK);
 }
 
+/* Period for a time: before 11:00 AM, before 16:00 MID, before 20:00 PM, then BED */
+static const char *period_for(int minute)
+{
+    static const int ends[DOSE_PERIOD_COUNT - 1] = {11 * 60, 16 * 60, 20 * 60};
+    for (int p = 0; p < DOSE_PERIOD_COUNT - 1; p++) {
+        if (minute < ends[p]) {
+            return dose_periods[p];
+        }
+    }
+    return dose_periods[DOSE_PERIOD_COUNT - 1];
+}
+
 /* Header sample: how the dose's row looks on the home screen */
 static void update_sample(void)
 {
@@ -198,32 +221,26 @@ static void update_sample(void)
     lv_obj_set_style_bg_opa(s_sample, LV_OPA_COVER, 0);
     lv_obj_set_style_text_color(s_sample_label, lv_color_hex(luma > 150 ? 0x111827 : 0xffffff), 0);
     const char *name = lv_textarea_get_text(s_name_ta);
-    lv_label_set_text_fmt(s_sample_label, "%s \u00b7 %s", name[0] ? name : "Name", dose_periods[s_period]);
+    char t[8];
+    dose_format_time(lv_roller_get_selected(s_hour_roller) * 60 + lv_roller_get_selected(s_minute_roller) * 5, t,
+                     sizeof(t));
+    lv_label_set_text_fmt(s_sample_label, "%s %s", t, name[0] ? name : "Name");
 }
 
-static void style_period_btns(void)
-{
-    for (int p = 0; p < DOSE_PERIOD_COUNT; p++) {
-        bool sel = p == s_period;
-        lv_obj_set_style_bg_color(s_period_btns[p], lv_color_hex(sel ? SELECTED_COLOR : CARD_COLOR), 0);
-        lv_obj_set_style_border_color(s_period_btns[p], lv_color_hex(sel ? 0x3b82f6 : CARD_BORDER), 0);
-        lv_obj_set_style_text_color(lv_obj_get_child(s_period_btns[p], 0), lv_color_hex(sel ? 0xffffff : UI_T->text), 0);
-    }
-}
-
-static void period_cb(lv_obj_t *obj, void *user_data)
-{
-    (void)obj;
-    s_period = (int)(intptr_t)user_data;
-    style_period_btns();
-    update_sample();
-}
-
+/* Selected swatch: a background-colored gap inside a 2px ring in the text color */
 static void style_swatches(void)
 {
-    for (int k = 0; k < DOSE_COLOR_COUNT; k++) {
-        lv_obj_set_style_border_width(s_swatches[k], dose_color_order[k] == s_color ? 2 : 0, 0);
+    for (int k = 0; k < DOSE_PICKER_COUNT; k++) {
+        bool sel = dose_color_order[k] == s_color;
+        lv_obj_set_style_border_width(s_swatches[k], sel ? 2 : 0, 0);
+        lv_obj_set_style_outline_width(s_swatches[k], sel ? 2 : 0, 0);
     }
+}
+
+static void time_changed_cb(lv_event_t *e)
+{
+    (void)e;
+    update_sample();
 }
 
 static void color_cb(lv_obj_t *obj, void *user_data)
@@ -295,12 +312,6 @@ static void open_edit(int index)
     }
     s_color = d.color < DOSE_COLOR_COUNT ? d.color : 0;
     s_sample = NULL;
-    s_period = 0;
-    for (int p = 0; p < DOSE_PERIOD_COUNT; p++) {
-        if (strcmp(d.period, dose_periods[p]) == 0) {
-            s_period = p;
-        }
-    }
 
     s_edit_screen = new_screen();
     lv_obj_t *scr = s_edit_screen;
@@ -317,7 +328,7 @@ static void open_edit(int index)
     lv_textarea_set_max_length(s_name_ta, DOSE_NAME_MAX);
     lv_textarea_set_placeholder_text(s_name_ta, "Name");
     lv_textarea_set_text(s_name_ta, d.name);
-    lv_obj_set_size(s_name_ta, 140, 34);
+    lv_obj_set_size(s_name_ta, 146, 34);
     lv_obj_set_pos(s_name_ta, 12, 62);
     lv_obj_set_style_text_font(s_name_ta, &inter_12_semibold, 0);
     lv_obj_set_style_text_color(s_name_ta, lv_color_hex(UI_T->text), 0);
@@ -332,42 +343,34 @@ static void open_edit(int index)
     lv_obj_add_event_cb(s_name_ta, name_event_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_event_cb(s_name_ta, name_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
-    /* Period */
-    caption(scr, "PERIOD", 164, 50);
-    for (int p = 0; p < DOSE_PERIOD_COUNT; p++) {
-        lv_obj_t *b = button(scr, 164 + p * 38, 62, 34, 34, CARD_BORDER);
-        lv_obj_set_ext_click_area(b, 2);
-        ui_on_tap(b, period_cb, (void *)(intptr_t)p);
-        lv_obj_center(label(b, dose_periods[p], &inter_10_semibold, UI_T->text));
-        s_period_btns[p] = b;
-    }
-    style_period_btns();
-
     /* Time */
     caption(scr, "TIME", 12, 104);
-    caption(scr, "REPEAT", 116, 104);
-    s_hour_roller = roller(scr, "00\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23", 12, 46, d.minute / 60);
-    s_minute_roller = roller(scr, "00\n05\n10\n15\n20\n25\n30\n35\n40\n45\n50\n55", 64, 46, (d.minute % 60) / 5);
+    caption(scr, "REPEAT", 104, 104);
+    s_hour_roller = roller(scr, "00\n01\n02\n03\n04\n05\n06\n07\n08\n09\n10\n11\n12\n13\n14\n15\n16\n17\n18\n19\n20\n21\n22\n23", 12, 42, d.minute / 60);
+    s_minute_roller = roller(scr, "00\n05\n10\n15\n20\n25\n30\n35\n40\n45\n50\n55", 58, 42, (d.minute % 60) / 5);
+    lv_obj_add_event_cb(s_hour_roller, time_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(s_minute_roller, time_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
     int day = 0; /* Daily, unless exactly one weekday */
     for (int k = 0; k < 7; k++) {
         if (d.days == (1u << k)) {
             day = k + 1;
         }
     }
-    s_day_roller = roller(scr, "Daily\nSun\nMon\nTue\nWed\nThu\nFri\nSat", 116, 64, day);
+    s_day_roller = roller(scr, "Daily\nSun\nMon\nTue\nWed\nThu\nFri\nSat", 104, 56, day);
 
-    /* Color: three rows of four swatches in spectrum order, the selected one ringed in white */
-    caption(scr, "COLOR", 218, 104);
-    for (int k = 0; k < DOSE_COLOR_COUNT; k++) {
+    /* Color: 6x3 grid of 22px swatches (dose_color_order), 2px apart, under the sample */
+    caption(scr, "COLOR", 166, COLOR_Y - 12);
+    for (int k = 0; k < DOSE_PICKER_COUNT; k++) {
         int c = dose_color_order[k];
         lv_obj_t *sw = plain_obj(scr);
-        lv_obj_set_size(sw, 20, 20);
-        lv_obj_set_pos(sw, 218 + (k % 4) * 24, 116 + (k / 4) * 24);
+        lv_obj_set_size(sw, 22, 22);
+        lv_obj_set_pos(sw, 166 + (k % 6) * 24, COLOR_Y + (k / 6) * 24);
         lv_obj_set_style_radius(sw, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_opa(sw, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(sw, lv_color_hex(dose_colors[c]), 0);
-        lv_obj_set_style_border_color(sw, lv_color_hex(UI_T->text), 0);
-        lv_obj_set_ext_click_area(sw, 2);
+        lv_obj_set_style_border_color(sw, lv_color_hex(BG_COLOR), 0);
+        lv_obj_set_style_outline_color(sw, lv_color_hex(UI_T->text), 0);
+        lv_obj_set_ext_click_area(sw, 1);
         ui_on_tap(sw, color_cb, (void *)(intptr_t)c);
         s_swatches[k] = sw;
     }
@@ -390,17 +393,16 @@ static void open_edit(int index)
         lv_obj_center(s_delete_label);
     }
 
-    /* Sample of the pending row, centered between the title and Save */
+    /* Sample above the colors: the dose's row as on the home list (same height and font) */
     s_sample = plain_obj(scr);
-    lv_obj_set_size(s_sample, 112, 26);
-    lv_obj_set_pos(s_sample, 128, 11);
-    lv_obj_set_style_radius(s_sample, 13, 0);
-    lv_obj_set_style_pad_hor(s_sample, 10, 0);
-    s_sample_label = label(s_sample, "", &inter_11_semibold, UI_T->text);
+    lv_obj_set_size(s_sample, 6 * 24 - 2, UI_DOSE_LIST_ROW_H);
+    lv_obj_set_pos(s_sample, 166, 62); /* level with the name box */
+    lv_obj_set_style_radius(s_sample, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_hor(s_sample, 9, 0);
+    s_sample_label = label(s_sample, "", &inter_13_semibold, UI_T->text);
     lv_obj_set_width(s_sample_label, LV_PCT(100));
-    lv_obj_set_style_text_align(s_sample_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(s_sample_label, LV_LABEL_LONG_DOT);
-    lv_obj_center(s_sample_label);
+    lv_obj_align(s_sample_label, LV_ALIGN_LEFT_MID, 0, 0);
     update_sample();
     lv_obj_move_foreground(s_error_label); /* errors still cover the header */
 
@@ -451,20 +453,57 @@ static void row_cb(lv_obj_t *obj, void *user_data)
     audio_play(AUDIO_CLICK);
 }
 
+/* Arrows are hidden when everything fits, and dim at either end */
+static void update_arrows(void)
+{
+    lv_obj_update_layout(s_list);
+    bool fits = lv_obj_get_scroll_top(s_list) <= 0 && lv_obj_get_scroll_bottom(s_list) <= 0;
+    lv_obj_set_flag(s_up, LV_OBJ_FLAG_HIDDEN, fits);
+    lv_obj_set_flag(s_down, LV_OBJ_FLAG_HIDDEN, fits);
+    lv_obj_set_width(s_list, fits ? ARROW_X + ARROW_W - LIST_X : LIST_W);
+    lv_obj_set_state(s_up, LV_STATE_DISABLED, lv_obj_get_scroll_top(s_list) <= 0);
+    lv_obj_set_state(s_down, LV_STATE_DISABLED, lv_obj_get_scroll_bottom(s_list) <= 0);
+}
+
+static void arrow_cb(lv_obj_t *obj, void *user_data)
+{
+    (void)obj;
+    int dir = (int)(intptr_t)user_data;
+    int32_t y = lv_obj_get_scroll_y(s_list) + dir * LIST_STEP;
+    int32_t max = lv_obj_get_scroll_y(s_list) + lv_obj_get_scroll_bottom(s_list);
+    lv_obj_scroll_to_y(s_list, LV_CLAMP(0, y, max), LV_ANIM_OFF);
+    update_arrows();
+    audio_play(AUDIO_CLICK);
+}
+
 static void build_rows(void)
 {
     lv_obj_clean(s_list);
+    lv_obj_set_width(s_list, LIST_W);
     int count = doses_count();
     lv_label_set_text_fmt(s_count_label, "%d of %d", count, DOSE_MAX);
     if (count == 0) {
         label(s_list, "No doses. Tap + Add.", &inter_11_semibold, UI_T->caption);
-        return;
     }
     for (int i = 0; i < count; i++) {
-        /* The row exactly as on the home screen, without today's state */
-        lv_obj_t *row = ui_dose_row(s_list, i, false, false);
+        lv_obj_t *row = ui_dose_row(s_list, i);
         ui_on_tap(row, row_cb, (void *)(intptr_t)i);
     }
+    lv_obj_scroll_to_y(s_list, 0, LV_ANIM_OFF);
+    update_arrows();
+}
+
+static lv_obj_t *arrow(lv_obj_t *parent, const lv_image_dsc_t *icon, int32_t y, int dir)
+{
+    lv_obj_t *b = button(parent, ARROW_X, y, ARROW_W, ARROW_H, CARD_BORDER);
+    lv_obj_set_style_opa(b, LV_OPA_40, LV_STATE_DISABLED);
+    ui_on_tap(b, arrow_cb, (void *)(intptr_t)dir);
+    lv_obj_t *img = lv_image_create(b);
+    lv_image_set_src(img, icon);
+    lv_obj_set_style_image_recolor(img, lv_color_hex(UI_T->text2), 0);
+    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
+    lv_obj_center(img);
+    return b;
 }
 
 static void build_list(void)
@@ -474,21 +513,21 @@ static void build_list(void)
     s_count_label = label(s_list_screen, "", &inter_9, UI_T->caption);
     lv_obj_align(s_count_label, LV_ALIGN_TOP_LEFT, 100, 19);
 
-    lv_obj_t *add = button(s_list_screen, 240, 6, 72, 36, CARD_BORDER);
+    lv_obj_t *add = button(s_list_screen, 204, 6, 108, 36, CARD_BORDER);
     ui_on_tap(add, add_cb, NULL);
     lv_obj_center(label(add, "+ Add", &inter_11_semibold, UI_T->text2));
 
-    /* Scrollable list below the header */
+    /* Paged by the arrows only: not scrollable by touch */
     s_list = plain_obj(s_list_screen);
-    lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
-    lv_obj_set_size(s_list, 320, 192);
-    lv_obj_set_pos(s_list, 0, 48);
-    lv_obj_set_style_pad_left(s_list, 8, 0);
+    lv_obj_set_size(s_list, LIST_W, LIST_H);
+    lv_obj_set_pos(s_list, LIST_X, LIST_Y);
     lv_obj_set_style_pad_bottom(s_list, 8, 0);
     lv_obj_set_flex_flow(s_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_list, 4, 0);
-    ui_scroll_gutter(s_list); /* drag strip + scrollbar on the right */
+    lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_OFF);
+
+    s_up = arrow(s_list_screen, &icon_chevron_up, LIST_Y, -1);
+    s_down = arrow(s_list_screen, &icon_chevron_down, LIST_Y + ARROW_H + 4, 1);
 }
 
 void ui_doses_invalidate(void)
@@ -506,8 +545,6 @@ void ui_doses_open(void)
     }
     s_return_to = lv_screen_active();
     build_rows();
-    lv_obj_scroll_to_y(s_list, 0, LV_ANIM_OFF);
-    ui_scroll_gutter_update(s_list);
     lv_screen_load(s_list_screen);
     ESP_LOGI(TAG, "open");
 }

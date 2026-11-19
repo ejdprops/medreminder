@@ -1,10 +1,11 @@
 /* Dose schedule and state. The schedule (name, period, time; up to DOSE_MAX, sorted by time) is
  * edited on the device and saved in NVS; until one is saved, the defaults below are used.
  * Taken doses are saved in NVS with the date, so a reboot doesn't forget them (or invite a
- * double dose); everything resets at midnight. A dose not taken OVERDUE_MIN after its time turns
- * overdue: the alert chime plays then and every ALERT_REPEAT_MIN until no dose is overdue. */
+ * double dose); everything resets at midnight. A dose not taken s_overdue_min after its time
+ * turns overdue (Settings > Overdue after, OVERDUE_MIN until set): the alert chime plays then and every ALERT_REPEAT_MIN until no dose is overdue. */
 #include "doses.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,7 @@
 #include <nvs.h>
 
 #include "audio.h"
+#include "matter_dev.h"
 #include "time_sync.h"
 
 static const char *TAG = "doses";
@@ -36,6 +38,8 @@ static const char *TAG = "doses";
 #define NVS_KEY_TAKEN "taken"
 #define NVS_KEY_SCHEDULE "sched2" /* blob: dose_def_t[count] */
 #define NVS_KEY_SCHEDULE_V1 "sched" /* before colors: dose_def_v1_t[count], migrated on load */
+#define NVS_KEY_OVERDUE "overdue"   /* u8: minutes after the time a dose turns overdue */
+#define NVS_KEY_UID "uid"           /* u8: next dose uid to try (uids aren't reused soon) */
 
 typedef struct {
     char name[DOSE_NAME_MAX + 1];
@@ -58,11 +62,30 @@ const uint32_t dose_colors[DOSE_COLOR_COUNT] = {
     0xeab308, /* yellow */
     0x16a34a, /* green */
     0x8ecdf0, /* pale sky blue */
+    0x92400e, /* brown */
+    0x9f1239, /* maroon */
+    0x65a30d, /* lime */
+    0x047857, /* emerald */
+    0x0891b2, /* cyan */
+    0x1e3a8a, /* navy */
+    0xfdba74, /* peach */
+    0xfde68a, /* butter */
+    0x86efac, /* mint */
+    0xc4b5fd, /* lavender */
+    0xf9a8d4, /* rose */
+    0x1f2937, /* charcoal */
+    0xf472b6, /* light pink */
 };
 
-/* Spectrum order: red, orange, amber, yellow, green, teal, sky, royal blue, indigo, purple, pink,
- * slate */
-const uint8_t dose_color_order[DOSE_COLOR_COUNT] = {8, 4, 5, 9, 10, 6, 11, 0, 1, 2, 3, 7};
+/* Picker grid, 6 per row: warm + deep (red, orange, amber, yellow, light pink, maroon), greens to blue
+ * (lime, green, emerald, teal, cyan, navy), blues to pink + pastels (royal, indigo, purple, pink,
+ * peach, butter). Not offered: slate, pale sky, mint, lavender, rose, charcoal (least vibrant), brown
+ * (replaced by light pink). */
+const uint8_t dose_color_order[DOSE_PICKER_COUNT] = {
+    8, 4, 5, 9, 24, 13,
+    14, 10, 15, 6, 16, 17,
+    0, 1, 2, 3, 18, 19,
+};
 
 /* Starting color for doses that have none yet (defaults, migrated schedules): by period */
 static uint8_t period_color(const char *period)
@@ -78,10 +101,10 @@ static uint8_t period_color(const char *period)
 
 /* Defaults for a new setup (nothing saved yet), one per period; rename/edit on the device */
 static const dose_def_t s_default_schedule[] = {
-    {"Dose", "AM", 7 * 60, 5, DOSE_OPACITY_DEFAULT, DOSE_DAILY},
-    {"Dose", "MID", 12 * 60, 6, DOSE_OPACITY_DEFAULT, DOSE_DAILY},
-    {"Dose", "PM", 18 * 60, 0, DOSE_OPACITY_DEFAULT, DOSE_DAILY},
-    {"Dose", "BED", 21 * 60, 2, DOSE_OPACITY_DEFAULT, DOSE_DAILY},
+    {"Dose", "AM", 7 * 60, 5, DOSE_OPACITY_DEFAULT, DOSE_DAILY, 1},
+    {"Dose", "MID", 12 * 60, 6, DOSE_OPACITY_DEFAULT, DOSE_DAILY, 2},
+    {"Dose", "PM", 18 * 60, 0, DOSE_OPACITY_DEFAULT, DOSE_DAILY, 3},
+    {"Dose", "BED", 21 * 60, 2, DOSE_OPACITY_DEFAULT, DOSE_DAILY, 4},
 };
 
 static dose_def_t s_defs[DOSE_MAX];
@@ -92,6 +115,8 @@ static dose_state_t s_states[DOSE_MAX];
 static time_t s_next_alert;       /* 0 = no alert pending */
 static uint8_t s_today = DOSE_DAILY; /* today's weekday bit; all days until the clock is set */
 static bool s_dirty;              /* changed outside doses_tick: report it on the next tick */
+static uint8_t s_uid_next = 1;    /* next uid to try */
+static int s_overdue_min = OVERDUE_MIN;
 #if CONFIG_MEDREMINDER_DOSE_TEST
 static time_t s_test_base;        /* test schedule start; 0 until the clock is set */
 #endif
@@ -147,8 +172,32 @@ static void save_schedule(void)
         nvs_set_blob(nvs, NVS_KEY_SCHEDULE, &empty, 1);
     }
     nvs_set_u32(nvs, NVS_KEY_TAKEN, s_taken);
+    nvs_set_u8(nvs, NVS_KEY_UID, s_uid_next);
     nvs_commit(nvs);
     nvs_close(nvs);
+}
+
+static bool uid_used(uint8_t uid, int except)
+{
+    for (int i = 0; i < s_count; i++) {
+        if (i != except && s_defs[i].uid == uid) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* A uid no other dose has, counting up so a deleted dose's uid (and its Home accessory) isn't
+ * handed to the next new dose. 1-255; DOSE_MAX doses can't use them all. */
+static uint8_t new_uid(int except)
+{
+    while (true) {
+        uint8_t uid = s_uid_next;
+        s_uid_next = s_uid_next == 255 ? 1 : s_uid_next + 1;
+        if (!uid_used(uid, except)) {
+            return uid;
+        }
+    }
 }
 
 static bool due_today(int i)
@@ -173,7 +222,7 @@ static void compute_states(time_t now, bool clock_ok)
             s_states[i] = DOSE_TAKEN;
             continue;
         }
-        if (clock_ok && now >= due_time(i, now) + OVERDUE_MIN * 60) {
+        if (clock_ok && now >= due_time(i, now) + s_overdue_min * 60) {
             s_states[i] = DOSE_OVERDUE;
         } else {
             s_states[i] = next_found ? DOSE_LATER : DOSE_NEXT;
@@ -225,6 +274,13 @@ void doses_init(void)
     if (nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs) == ESP_OK) {
         nvs_get_u32(nvs, NVS_KEY_DATE, &s_date);
         nvs_get_u32(nvs, NVS_KEY_TAKEN, &s_taken);
+        nvs_get_u8(nvs, NVS_KEY_UID, &s_uid_next);
+#if !CONFIG_MEDREMINDER_DOSE_TEST
+        uint8_t overdue;
+        if (nvs_get_u8(nvs, NVS_KEY_OVERDUE, &overdue) == ESP_OK && overdue > 0) {
+            s_overdue_min = overdue;
+        }
+#endif
         if (nvs_get_blob(nvs, NVS_KEY_SCHEDULE, s_defs, &len) == ESP_OK) {
             s_count = len % sizeof(dose_def_t) == 0 ? len / sizeof(dose_def_t) : 0; /* 1 byte: empty */
             saved = true;
@@ -246,14 +302,33 @@ void doses_init(void)
         }
         nvs_close(nvs);
     }
-    if (migrated) {
-        ESP_LOGI(TAG, "migrated %d doses to the schedule with colors", s_count);
-        save_schedule();
-    }
     if (!saved) {
         s_count = sizeof(s_default_schedule) / sizeof(s_default_schedule[0]);
         memcpy(s_defs, s_default_schedule, sizeof(s_default_schedule));
         ESP_LOGI(TAG, "no saved schedule: using the default %d doses", s_count);
+    }
+    /* uids: saved before they existed (0, or whatever the padding byte held) or duplicated */
+    if (s_uid_next == 0) {
+        s_uid_next = 1;
+    }
+    for (int i = 0; i < s_count; i++) {
+        if (s_defs[i].uid >= s_uid_next) {
+            s_uid_next = s_defs[i].uid == 255 ? 1 : s_defs[i].uid + 1;
+        }
+    }
+    for (int i = 0; i < s_count; i++) {
+        bool dup = false;
+        for (int j = 0; j < i && !dup; j++) {
+            dup = s_defs[j].uid == s_defs[i].uid;
+        }
+        if (s_defs[i].uid == 0 || dup) {
+            s_defs[i].uid = new_uid(i);
+            migrated |= saved;
+        }
+    }
+    if (migrated) {
+        ESP_LOGI(TAG, "updated the saved schedule (%d doses)", s_count);
+        save_schedule();
     }
     for (int i = 0; i < s_count; i++) {
         if (s_defs[i].color >= DOSE_COLOR_COUNT) {
@@ -313,7 +388,27 @@ int doses_next(void)
             return i;
         }
     }
-    return 0;
+    return -1;
+}
+
+int doses_find_uid(uint8_t uid)
+{
+    for (int i = 0; i < s_count; i++) {
+        if (s_defs[i].uid == uid) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int doses_first_on(int wday)
+{
+    for (int i = 0; i < s_count; i++) {
+        if (s_defs[i].days & (1u << wday)) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 bool doses_take(int i)
@@ -340,6 +435,41 @@ bool doses_untake(int i)
     return true;
 }
 
+int doses_overdue_min(void)
+{
+    return s_overdue_min;
+}
+
+void doses_set_overdue_min(int minutes)
+{
+    if (minutes < 1 || minutes > 255 || minutes == s_overdue_min) {
+        return;
+    }
+    s_overdue_min = minutes;
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_u8(nvs, NVS_KEY_OVERDUE, (uint8_t)minutes);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+    }
+    compute_states(time(NULL), time_is_valid());
+    s_dirty = true;
+    ESP_LOGI(TAG, "overdue after %d min", minutes);
+}
+
+bool doses_any_due(time_t now)
+{
+    if (!time_is_valid()) {
+        return false;
+    }
+    for (int i = 0; i < s_count; i++) {
+        if (due_today(i) && !(s_taken & (1u << i)) && now >= due_time(i, now)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void dose_format_time(int minute, char *buf, int len)
 {
     snprintf(buf, len, "%02d%02d", minute / 60, minute % 60); /* 24 h, military style: "0600" */
@@ -364,13 +494,19 @@ const char *doses_set(int index, const dose_def_t *d)
             return err;
         }
     }
+    uint8_t uid;
     if (index < 0) {
         index = s_count++;
         s_taken &= ~(1u << index);
-    } else if (!same_dose(&s_defs[index], d)) {
-        s_taken &= ~(1u << index); /* a changed dose starts not taken */
+        uid = new_uid(index);
+    } else {
+        uid = s_defs[index].uid;
+        if (!same_dose(&s_defs[index], d)) {
+            s_taken &= ~(1u << index); /* a changed dose starts not taken */
+        }
     }
     s_defs[index] = *d;
+    s_defs[index].uid = uid;
     sort_keep_taken();
     save_schedule();
     compute_states(time(NULL), time_is_valid());
@@ -397,25 +533,60 @@ void doses_delete(int index)
     s_dirty = true;
 }
 
-void doses_reset(void)
+/* Apple Home's view: one accessory per dose, "<name> <time>" (+ weekday for weekly doses), on
+ * when taken today; plus whether any dose is overdue */
+static void publish(void)
 {
-    s_taken = 0;
-    s_next_alert = 0;
-#if CONFIG_MEDREMINDER_DOSE_TEST
-    if (s_test_base) {
-        s_test_base = time(NULL);
+    static const char *const wday[7] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+    matter_dose_t doses[DOSE_MAX];
+    bool overdue = false;
+    for (int i = 0; i < s_count; i++) {
+        const dose_def_t *d = &s_defs[i];
+        doses[i].uid = d->uid;
+        doses[i].on = due_today(i) && (s_taken & (1u << i));
+        int day = -1;
+        for (int w = 0; w < 7 && d->days != DOSE_DAILY; w++) {
+            if (d->days & (1u << w)) {
+                day = w;
+            }
+        }
+        char t[8];
+        dose_format_time(d->minute, t, sizeof(t));
+        memset(doses[i].label, 0, sizeof(doses[i].label)); /* compared with memcmp */
+        snprintf(doses[i].label, sizeof(doses[i].label), "%.15s %.4s%s%.3s", d->name, t, day >= 0 ? " " : "",
+                 day >= 0 ? wday[day] : "");
+        /* Serial: first letter of the name, the time, the weekday: "K-0900-TUE" */
+        memset(doses[i].serial, 0, sizeof(doses[i].serial));
+        snprintf(doses[i].serial, sizeof(doses[i].serial), "%c-%.4s%s%.3s", toupper((unsigned char)d->name[0]), t,
+                 day >= 0 ? "-" : "", day >= 0 ? wday[day] : "");
+        overdue |= s_states[i] == DOSE_OVERDUE;
     }
-#endif
-    save_taken();
-    compute_states(time(NULL), time_is_valid());
-    ESP_LOGI(TAG, "reset");
+    matter_dev_publish(doses, s_count, overdue);
+}
+
+/* Take/undo from Home. Only doses due today; anything else is refused and publish() sets Home's
+ * switch back. */
+static bool apply_home_requests(void)
+{
+    bool changed = false;
+    uint8_t uid;
+    bool on;
+    while (matter_dev_next_request(&uid, &on)) {
+        for (int i = 0; i < s_count; i++) {
+            if (s_defs[i].uid == uid && due_today(i)) {
+                changed |= on ? doses_take(i) : doses_untake(i);
+            }
+        }
+    }
+    return changed;
 }
 
 bool doses_tick(time_t now)
 {
-    bool changed = s_dirty;
+    bool changed = s_dirty | apply_home_requests();
     s_dirty = false;
     if (!time_is_valid()) {
+        publish();
         return changed;
     }
 #if CONFIG_MEDREMINDER_DOSE_TEST
@@ -449,6 +620,7 @@ bool doses_tick(time_t now)
         }
     }
 
+    publish();
     if (!overdue) {
         s_next_alert = 0;
     } else if (!s_next_alert || now >= s_next_alert) {

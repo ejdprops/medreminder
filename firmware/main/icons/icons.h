@@ -2,6 +2,14 @@
 #pragma once
 #include "lvgl.h"
 
+LV_IMAGE_DECLARE(icon_check_circle);
+LV_IMAGE_DECLARE(icon_chevron_down);
 LV_IMAGE_DECLARE(icon_chevron_left);
-LV_IMAGE_DECLARE(icon_reset);
+LV_IMAGE_DECLARE(icon_chevron_up);
+LV_IMAGE_DECLARE(icon_close);
+LV_IMAGE_DECLARE(icon_info);
+LV_IMAGE_DECLARE(icon_menu);
+LV_IMAGE_DECLARE(icon_pill);
 LV_IMAGE_DECLARE(icon_settings);
+LV_IMAGE_DECLARE(icon_sun);
+LV_IMAGE_DECLARE(icon_volume);

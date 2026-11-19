@@ -73,6 +73,19 @@ const char *ui_dose_slot_text(int i, bool live, bool next, char *buf, size_t len
     return buf;
 }
 
+void ui_dose_pulse(lv_obj_t *obj)
+{
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, obj);
+    lv_anim_set_exec_cb(&a, pulse_exec);
+    lv_anim_set_values(&a, LV_OPA_COVER, 184); /* 1 -> 0.72 opacity, 1.4s cycle */
+    lv_anim_set_duration(&a, 700);
+    lv_anim_set_reverse_duration(&a, 700);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_start(&a);
+}
+
 lv_obj_t *ui_dose_pill(lv_obj_t *parent, int i, int32_t w, int32_t h, bool live)
 {
     lv_obj_t *pill = lv_obj_create(parent);
@@ -86,22 +99,13 @@ lv_obj_t *ui_dose_pill(lv_obj_t *parent, int i, int32_t w, int32_t h, bool live)
     if (live && dose_state(i) == DOSE_OVERDUE) {
         lv_obj_set_style_border_width(pill, OVERDUE_BORDER_W, 0);
         lv_obj_set_style_border_color(pill, lv_color_hex(OVERDUE_BORDER), 0);
-        lv_anim_t a;
-        lv_anim_init(&a);
-        lv_anim_set_var(&a, pill);
-        lv_anim_set_exec_cb(&a, pulse_exec);
-        lv_anim_set_values(&a, LV_OPA_COVER, 184); /* 1 -> 0.72 opacity, 1.4s cycle */
-        lv_anim_set_duration(&a, 700);
-        lv_anim_set_reverse_duration(&a, 700);
-        lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-        lv_anim_start(&a);
+        ui_dose_pulse(pill);
     }
     return pill;
 }
 
-/* One size for every row: time, name, period and check 14px, "Taken" 16px */
+/* Doses list row: time, name, weekday for a weekly dose; 14px */
 #define MAIN_FONT (&inter_14_semibold)
-#define TAKEN_FONT (&inter_16_semibold)
 #define ROW_PAD_H 14
 #define ROW_GAP 10
 
@@ -111,16 +115,16 @@ static lv_obj_t *one_line(lv_obj_t *l)
     return l;
 }
 
-lv_obj_t *ui_dose_row(lv_obj_t *parent, int i, bool live, bool next)
+lv_obj_t *ui_dose_row(lv_obj_t *parent, int i)
 {
-    lv_obj_t *row = ui_dose_pill(parent, i, LV_PCT(100), UI_DOSE_ROW_H, live);
+    static const char *const wdays[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+    lv_obj_t *row = ui_dose_pill(parent, i, LV_PCT(100), UI_DOSE_ROW_H, false);
     lv_obj_set_style_pad_hor(row, ROW_PAD_H, 0);
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(row, ROW_GAP, 0);
 
-    bool taken = live && dose_state(i) == DOSE_TAKEN;
-    char buf[32];
+    char buf[8];
     dose_format_time(dose_def(i)->minute, buf, sizeof(buf));
     one_line(label(row, buf, MAIN_FONT, ui_dose_name_color(i)));
     /* The name takes what's left and ends in "..." if it doesn't fit; the fixed one-line height
@@ -129,15 +133,39 @@ lv_obj_t *ui_dose_row(lv_obj_t *parent, int i, bool live, bool next)
     lv_obj_set_flex_grow(name, 1);
     lv_obj_set_height(name, lv_font_get_line_height(MAIN_FONT));
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-    ui_dose_slot_text(i, live && !taken, next, buf, sizeof(buf));
+    uint8_t days = dose_def(i)->days;
+    for (int k = 0; k < 7; k++) {
+        if (days == (1u << k)) {
+            one_line(label(row, wdays[k], MAIN_FONT, ui_dose_slot_color(i)));
+        }
+    }
+    return row;
+}
+
+/* Home list row: time, name, check when taken; 13px, no period (the time says it) */
+#define LIST_FONT (&inter_13_semibold)
+
+lv_obj_t *ui_dose_list_row(lv_obj_t *parent, int i)
+{
+    bool taken = dose_state(i) == DOSE_TAKEN;
+    lv_obj_t *row = ui_dose_pill(parent, i, LV_PCT(100), UI_DOSE_LIST_ROW_H, true);
+    lv_obj_set_flex_grow(row, 1); /* fill the list when it shows fewer rows */
+    lv_obj_set_style_radius(row, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_pad_hor(row, 9, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(row, 6, 0);
+    uint32_t text = ui_dose_name_color(i);
+
+    char buf[8];
+    dose_format_time(dose_def(i)->minute, buf, sizeof(buf));
+    one_line(label(row, buf, LIST_FONT, text));
+    lv_obj_t *name = label(row, dose_name(i), LIST_FONT, text);
+    lv_obj_set_flex_grow(name, 1);
+    lv_obj_set_height(name, lv_font_get_line_height(LIST_FONT));
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     if (taken) {
-        /* name · "Taken" · period · check */
-        one_line(label(row, "Taken", TAKEN_FONT, ui_dose_name_color(i)));
-        lv_obj_t *slot = one_line(label(row, buf, MAIN_FONT, ui_dose_slot_color(i)));
-        lv_obj_set_style_margin_right(slot, -6, 0); /* the check sits next to it, not a column away */
-        one_line(label(row, "\u2713", MAIN_FONT, ui_dose_name_color(i)));
-    } else {
-        one_line(label(row, buf, MAIN_FONT, ui_dose_slot_color(i)));
+        one_line(label(row, "\u2713", LIST_FONT, text));
     }
     return row;
 }

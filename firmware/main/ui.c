@@ -12,6 +12,7 @@ static const char *TAG = "ui";
 #include "bsp/esp-bsp.h"
 #include "images/images.h"
 #include "ui_home.h"
+#include "ui_sleep.h"
 #include "ui_theme.h"
 
 #define SPLASH_MS 5000
@@ -53,6 +54,7 @@ static void ui_init_task(void *arg)
             lv_obj_t *home = lv_obj_create(NULL);
             ui_home_create(home);
             show_splash_then(home);
+            ui_sleep_init();
             bsp_display_unlock();
         }
         esp_err_t err = bsp_display_show();

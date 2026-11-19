@@ -6,14 +6,20 @@
 extern "C" {
 #endif
 
-/* A dose drawn as a pill-shaped row (time, name, period, weekday for weekly doses), solid in the
- * dose's color with dark or white text by the color's brightness. Shared by the home list and
- * Settings > Doses so both show the same thing.
- *   live: show today's state ("Taken ✓", "· next", "· late", overdue pulse + red border);
- *   next: this is the next dose (for "· next"/"· late"). */
+/* Doses list row: a 30px pill (time, name, weekday for weekly doses), solid in the dose's color
+ * with dark or white text by the color's brightness. No today state. */
 #define UI_DOSE_ROW_H 30
 
-lv_obj_t *ui_dose_row(lv_obj_t *parent, int i, bool live, bool next);
+lv_obj_t *ui_dose_row(lv_obj_t *parent, int i);
+
+/* Home list row (RECT layout): time + name, check when taken. Always the solid dose color;
+ * only overdue rows get a red border and pulse. UI_DOSE_LIST_ROW_H tall, or taller: it grows to
+ * share its flex-column parent's height when fewer rows are shown. */
+#define UI_DOSE_LIST_ROW_H 28
+lv_obj_t *ui_dose_list_row(lv_obj_t *parent, int i);
+
+/* Overdue pulse on obj's background: 1 -> 0.72 opacity, 1.4s cycle */
+void ui_dose_pulse(lv_obj_t *obj);
 
 /* Building blocks, also used by the round layout */
 lv_obj_t *ui_dose_pill(lv_obj_t *parent, int i, int32_t w, int32_t h, bool live);

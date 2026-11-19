@@ -68,7 +68,7 @@ firmware/
 ├── CMakeLists.txt        reads BOARD (-DBOARD / env, default c5_waveshare); sets ESP_MATTER_DEVICE_PATH itself
 ├── build.sh
 ├── sdkconfig.defaults    common (from esp-matter light example)
-├── main/                 app_main.cpp (esp-matter light example, placeholder Matter device), ui.c
+├── main/                 app_main.cpp (Matter node), matter_dev.cpp (bridge: dose accessories), ui.c
 │   │                     (display startup), ui_home.c (home screen), icons/ (generated A8 images)
 │   ├── icons/svg/        icon sources; regenerate with tools/svg_icons.py (see below)
 │   └── fonts/            generated Inter LVGL fonts (tools/gen_fonts.sh) + OFL license
@@ -296,6 +296,32 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
         fixed height or it wraps instead of truncating.
       - Logo: `tools/cyber_logo.py` recolors `averak_labs_neon.png` -> `averak_labs_cyber.png`
         (yellow AVERAK, glowing magenta strokes); About shows it in a dark tile.
+
+  - **7e** (in progress, branch `matter-accessories`, not yet flashed) Matter accessories
+    (`main/matter_dev.cpp`). The device is a **bridge**: aggregator endpoint 1 (replaces the light
+    example's placeholder light) with bridged endpoints:
+    - "Dose overdue": Contact Sensor, open while any dose is overdue (Home notifications).
+    - One On/Off Plug-in Unit per dose, NodeLabel "<name> <period>" (+ " TUE" for weekly), on =
+      taken today. On/off from Home takes/undoes it (same as a tap); doses not due today stay off
+      and writes to them are set back.
+    - Stable identity: each dose has a `uid` (1-255, the former padding byte of `dose_def_t`, so
+      the `sched2` layout is unchanged; assigned on load for older saves, counter in NVS
+      `doses`/`uid`, not reused soon). `matter_dev` saves uid -> endpoint id (NVS `matter_dev`/`eps`)
+      and resumes endpoints with their ids at boot, so Home rooms/automations survive edits and
+      re-sorting. Add/delete a dose adds/removes its endpoint live; rename updates NodeLabel (the
+      device's name wins at every boot). If ids can't be resumed (Matter factory reset), new ones.
+    - Threads: the UI task publishes snapshots from `doses_tick` (`matter_dev_publish`) and drains
+      Home requests (`matter_dev_next_request`); a `matter_dev` task (PSRAM stack) does the
+      endpoint/attribute work. esp-matter's stack lock isn't recursive and `enable()`, `destroy()`,
+      `attribute::update()` take it themselves: never call them holding it. Never take the display
+      lock from the CHIP task (matter_info takes the stack lock under the display lock).
+    - RAM: `ESP_MATTER_MEM_ALLOC_MODE_EXTERNAL` (data model in PSRAM),
+      `MAX_DYNAMIC_ENDPOINT_COUNT` 20. Cluster servers reserve RAM per dynamic endpoint: Color
+      Control is disabled (a stub for `emberAfPluginLevelControlCoupledColorTempChangeCallback` in
+      matter_dev.cpp; Level Control can't go, On/Off links against it). Static .bss +1.1KB vs v0.6.0.
+    - To test: re-add the accessory in Home if the old light lingers; tiles per dose; take/undo
+      both ways; add/rename/delete a dose live; reboot keeps tiles/rooms; overdue notification;
+      heap during commissioning with 16 doses.
 
 - Licensing: Waveshare code is Apache-2.0. Keep headers on copied files and list them in a
   `THIRD_PARTY_LICENSES` file. `esp_xiaozhi` has its own license; don't copy it.
