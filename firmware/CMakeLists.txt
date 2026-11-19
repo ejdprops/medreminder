@@ -25,8 +25,8 @@ set(ENV{ESP_MATTER_DEVICE_PATH} ${BOARD_DIR})
 # Firmware version: bump both together for a release, then tag fw-v<PROJECT_VER> (CLAUDE.md).
 # PROJECT_VER is Matter's SoftwareVersionString; PROJECT_VER_NUMBER is SoftwareVersion and must
 # increase with every release (OTA compares it).
-set(PROJECT_VER "0.6.0")
-set(PROJECT_VER_NUMBER 6)
+set(PROJECT_VER "1.0.0")
+set(PROJECT_VER_NUMBER 7)
 
 set(ESP_MATTER_PATH $ENV{ESP_MATTER_PATH})
 set(MATTER_SDK_PATH ${ESP_MATTER_PATH}/connectedhomeip/connectedhomeip)
