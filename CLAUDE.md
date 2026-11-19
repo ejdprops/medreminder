@@ -53,7 +53,7 @@ python tools/serial_capture.py --seconds 60 --reset --out /tmp/boot.log   # read
   `PROJECT_VER_NUMBER` (integer Matter SoftwareVersion; must increase every release, OTA compares
   it). Bump both together. Releases are tagged `fw-v<PROJECT_VER>`.
 - Every build runs `tools/build_info.cmake` -> `build_info.h` with `git describe --tags --match
-  "fw-v*" --dirty`. Screens (home bottom-center, settings bottom-right) show `v0.3.0` when built
+  "fw-v*" --dirty`. Screens (home bottom-center, settings bottom-left) show `v0.3.0` when built
   exactly at the tag with a clean tree; past it, commits since the tag and `*` for uncommitted
   changes (`v0.3.0-2*`); `v0.3.0-dev` if the latest tag isn't this PROJECT_VER. The boot log prints
   the full describe string and SoftwareVersion: `firmware v0.3.0-2* (fw-v0.3.0-2-gabc1234-dirty), ...`.
@@ -69,7 +69,8 @@ firmware/
 ├── build.sh
 ├── sdkconfig.defaults    common (from esp-matter light example)
 ├── main/                 app_main.cpp (Matter node), matter_dev.cpp (bridge: dose accessories), ui.c
-│   │                     (display startup), ui_home.c (home screen), icons/ (generated A8 images)
+│   │                     (display startup), ui_home.c (home screen), ui_settings.c, ui_doses.c
+│   │                     (schedule list + editor), ui_sleep.c, icons/ (generated A8 images)
 │   ├── icons/svg/        icon sources; regenerate with tools/svg_icons.py (see below)
 │   └── fonts/            generated Inter LVGL fonts (tools/gen_fonts.sh) + OFL license
 ├── tools/serial_capture.py, tools/svg_icons.py, tools/gen_fonts.sh
@@ -96,6 +97,8 @@ firmware/
   `image_recolor`. Needs Pillow + svg.path in a throwaway venv (not the IDF env):
   `python -m venv /tmp/v && /tmp/v/bin/pip install pillow svg.path &&
   /tmp/v/bin/python tools/svg_icons.py --size 20 main/icons/svg/*.svg --out main/icons`.
+  New icons need a `LV_IMAGE_DECLARE` in `main/icons/icons.h`; new source files need
+  `./build.sh c5_waveshare reconfigure build` (main globs its source dirs).
 
 New board = new folder under `boards/` with the same files. Nothing in `~/esp/esp-matter` is modified
 for this project (an old `device_hal/device/waveshare_c5_lcd28/` there is a leftover; ignore it).
@@ -164,27 +167,32 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
   C++17 Matter forces). Reuse Waveshare's look: icon images (112×112 ARGB8888 C arrays, e.g.
   `examples/factory/components/Settings/assets/img_app_settings.c`), dark stylesheet colors/fonts
   (`examples/factory/main/dark/`), LVGL QR widget usage from their Settings app.
-- Design: claude.ai artifact "MedReminder Round Display UI", artboard
-  **"C5 2.8in rectangular"** (renamed from "Living room — C5 2.8in": the device may move rooms and
-  more units may go elsewhere, so artboard and code names are location-neutral). Landscape 320×240:
-  white background (Settings > Dark mode switches every page, see 7c.5). Top line 16px bold:
-  weekday + date deep blue, 24 h time deep green ("TUE  17 NOV · 1312 hrs"). Doses: a scrollable
-  "today" list (y 32-198, five rows fit), one solid row per dose in the dose's own color (30px
-  high, radius 15; `main/ui_dose_row.c`): time ("0600"), name, period (+ weekday for weekly
-  doses), all 14px; dark text on light colors. State: "· next", "· late", "Taken" (16px) + "✓",
-  overdue pulses with a red border. Scrolled to the next dose; scrollbar gutter on the right.
-  Tap a next/overdue row to take it, a taken row to undo; later rows ignore taps. Chosen after
-  testing over the earlier rotating pills (in git history at v0.4.0). Boot splash: Averak Labs
-  logo (cyberpunk recolor) for
-  5 s (`SPLASH_MS` in `main/ui.c`), then a fade to home. No corner tiles
-  (the old package/garage/lights/door tiles were removed; icons are in git history). Bottom:
-  node-sync status centered with a faint green (synced) / red outline instead of a dot, version
-  centered below it, **settings gear** far right (36px drawn, 44px touch area), dev reset button
-  far left (Kconfig `MEDREMINDER_DEV_TOOLS`, default on; turn off for release builds). Taps count
-  only when held >= 100ms (`main/ui_tap.c`, `UI_TAP_MIN_MS`). Center layout is per board:
-  Kconfig `MEDREMINDER_UI_LAYOUT` RECT (C5) or ROUND (old circle layout, for round displays).
-  Gear opens Settings: Matter setup QR + manual code (generate from esp-matter onboarding
-  codes, show until paired), pairing status, alert volume, brightness.
+- Design: claude.ai Design artifact (boards "Set B (menu)": MenuNext, MenuOverdue, MenuUndo,
+  MenuDone, MenuOpen, MenuSettings, MenuDoses, MenuEdit). The firmware has since moved past the
+  boards in places (banner, list height, editor colors): the code is the reference. Names are
+  location-neutral (the device may move rooms; more units may go elsewhere). Landscape 320×240,
+  light theme default (Settings > Dark mode switches every page, see 7c.5). Current home (7f,
+  `main/ui_home.c`, RECT layout):
+  - Top: centered banner, 16px bold, date deep blue · 24 h time deep green
+    ("THU 19 NOV · 0511 hrs"); hamburger menu button top-right (272,4, 40×32) opens a panel:
+    Doses, Settings, About (tap outside or X closes it).
+  - Left (y 42-198): today's doses as a compact list (`ui_dose_list_row`), time + name, 13px,
+    solid dose color always (taken rows only add "✓"; overdue rows get a red border + pulse; no
+    outline on the next dose: an earlier ring / tint made colors look wrong). Max 5 rows (28px);
+    fewer rows grow (flex_grow) to fill the height. More than 5: up/down arrows on the far left
+    page by 4 and the list snaps so the next dose shows; otherwise the arrows hide and the list
+    takes their column. Rows are display only, except hold a taken row 1 s to undo (confirm dialog).
+  - Right (x 189, w 123, same height as the list): the next dose as a big card in its color:
+    time, name (23px, up to 2 lines), "Tap when taken". The card is the only tap target (she found
+    the old rows hard to hit). Overdue: red 3px border, pulse, "Late N min" badge. After a take, a
+    10 s Undo strip (amber button, countdown bar) shares the card's space. Nothing left: gray "All
+    done today" card with tomorrow's first dose.
+  - Bottom: node-sync status (faint green/red outline) and version, centered on the screen.
+  - Taps count only when held >= 100ms (`main/ui_tap.c`, `UI_TAP_MIN_MS`). Layout per board:
+    Kconfig `MEDREMINDER_UI_LAYOUT` RECT (C5) or ROUND (old circle layout, kept for round
+    displays, still has a settings gear). Boot splash: Averak Labs logo (cyberpunk recolor) for 5 s
+    (`SPLASH_MS` in `main/ui.c`), then a fade to home.
+  - Earlier home layouts (rotating pills v0.4.0, full-width today list v0.6.0) are in git history.
 - Roadmap:
   - **7a** (done) Waveshare BSP (display, touch, CH32V003 expander) in
     `boards/c5_waveshare/components/` (sensors/Wi-Fi stripped), static test screen from
@@ -205,7 +213,8 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
       (`main/ui_home.c`); internal RAM unchanged (62.9KB idle, min 29.5KB).
     - 7b.3 (done) project fonts: Inter 4.1 (OFL) via `tools/gen_fonts.sh <Inter ttf dir>` (Node `npx
       lv_font_conv@1.5.3`, Node from Homebrew) -> `main/fonts/` (committed). Sizes/weights from the
-      design: 8, 9 regular; 9, 10, 11, 12, 14, 16, 23 semibold; 12, 16 bold. Glyphs: ASCII + "·" + "✓" only; add
+      design: 8, 9 regular; 9, 10, 11, 12, 13, 14, 16, 23 semibold; 12, 16 bold. Inter 4.1 TTFs:
+      download the release zip from github.com/rsms/inter (`extras/ttf/`); not kept in the repo. Glyphs: ASCII + "·" + "✓" only; add
       ranges in the script for new characters. Built-in Montserrat: only LVGL's default 14 left.
     - 7b.4 (done) settings page (`main/ui_settings.c`): Matter QR + manual code generated on the
       device (`main/matter_info.cpp`, takes the CHIP stack lock), hidden behind "Show setup code"
@@ -263,7 +272,7 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
       (C5: "Averak Labs" / "Pill Reminder Rect"; a round board would use "Pill Reminder Round").
       Changing it rebuilds Matter (~20 min). Apple Home may need the accessory re-added to show
       new names.
-    - 7c.4 (done, v0.5.0) dose schedule editing + undo. Settings > Doses (`main/ui_doses.c`): scrollable list
+    - 7c.4 (done, v0.5.0; list/editor reworked in 7f) dose schedule editing + undo. Settings > Doses (`main/ui_doses.c`): scrollable list
       (time, name, period), tap a row to edit, "+ Add"; edit screen has name (LVGL keyboard),
       period AM/MID/PM/BED, hour/5-min/AM-PM rollers, Save, Delete (tap twice). Up to 16 doses
       (`DOSE_MAX`), saved as an NVS blob (`doses`/`sched`), sorted by time. New setup (nothing
@@ -277,9 +286,8 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
       - One-line LVGL text areas jitter if the box is even 1px shorter than border + padding +
         font line height (it scrolls as the cursor blinks).
     - 7c.5 (done, v0.6.0) dose colors, weekly doses, themes, 24 h:
-      - Per-dose color from 12 (`dose_colors`, index saved per dose, append only; picker in
-        spectrum order `dose_color_order`), 3x4 swatches in the editor + a live sample in the
-        header. Rows are solid (an opacity option was tried and removed; `opacity` stays in the
+      - Per-dose color (`dose_colors`, index saved per dose, append only; the picker offers
+        `dose_color_order`, see 7f for the current set). Rows are solid (an opacity option was tried and removed; `opacity` stays in the
         struct for the saved layout).
       - Weekly doses: `days` bitmask (Daily or one weekday roller); only shown/alerted on their
         day; same person + same time allowed on different days. Schedule NVS key `sched2`
@@ -288,21 +296,24 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
         colors from `UI_T`; the Settings switch rebuilds home in place (`ui_home_restyle`), drops
         cached Doses/About screens and rebuilds Settings, no reboot.
       - 24 h military time everywhere ("0600"; clock "1312 hrs"); editor hour roller 00-23.
-      - Scrollbar gutter (`main/ui_scroll.c`): 32px touch strip right of the list with a track +
-        thumb; touch jumps/drags (down = down), so scrolling there never takes a dose. Lists
-        stop before it. LVGL list padding is not touchable (plain objects aren't clickable), so a
-        padding-only gutter did nothing.
+      - Scrollbar gutter (`ui_scroll.c`, removed in 7f for arrow buttons; in git history). LVGL
+        list padding is not touchable (plain objects aren't clickable).
       - Rows have one font size (per-row auto-fit looked uneven). A label with LONG_DOT needs a
         fixed height or it wraps instead of truncating.
       - Logo: `tools/cyber_logo.py` recolors `averak_labs_neon.png` -> `averak_labs_cyber.png`
         (yellow AVERAK, glowing magenta strokes); About shows it in a dark tile.
 
-  - **7e** (in progress, branch `matter-accessories`, not yet flashed) Matter accessories
+  - **7e** (branch `matter-accessories`; flashed, endpoints come up at boot; Home-side testing
+    still to do) Matter accessories
     (`main/matter_dev.cpp`). The device is a **bridge**: aggregator endpoint 1 (replaces the light
     example's placeholder light) with bridged endpoints:
-    - "Dose overdue": Contact Sensor, open while any dose is overdue (Home notifications).
-    - One On/Off Plug-in Unit per dose, NodeLabel "<name> <period>" (+ " TUE" for weekly), on =
-      taken today. On/off from Home takes/undoes it (same as a tap); doses not due today stay off
+    - "Dose overdue": Contact Sensor, open while any dose is overdue (Home notifications). Boolean
+      State is code-driven: `attribute::update` can't set it; get the cluster from
+      `data_model::provider::get_instance().registry()` and call `SetStateValue` (also sends the
+      StateChange event).
+    - One On/Off Plug-in Unit per dose, NodeLabel "<name> <time>" ("Karen 0930", + " TUE" for
+      weekly), on = taken today. Bridged Basic Information: Manufacturer/Product from the device's
+      own config, SerialNumber "K-0930-TUE" (initial, time, weekday), UniqueID "dose-<uid>". On/off from Home takes/undoes it (same as a tap); doses not due today stay off
       and writes to them are set back.
     - Stable identity: each dose has a `uid` (1-255, the former padding byte of `dose_def_t`, so
       the `sched2` layout is unchanged; assigned on load for older saves, counter in NVS
@@ -311,7 +322,9 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
       re-sorting. Add/delete a dose adds/removes its endpoint live; rename updates NodeLabel (the
       device's name wins at every boot). If ids can't be resumed (Matter factory reset), new ones.
     - Threads: the UI task publishes snapshots from `doses_tick` (`matter_dev_publish`) and drains
-      Home requests (`matter_dev_next_request`); a `matter_dev` task (PSRAM stack) does the
+      Home requests (`matter_dev_next_request`; the attribute callback also fires for the module's
+      own updates, so writes coming from the `matter_dev` task (`s_task`) are not requests); a
+      `matter_dev` task (PSRAM stack) does the
       endpoint/attribute work. esp-matter's stack lock isn't recursive and `enable()`, `destroy()`,
       `attribute::update()` take it themselves: never call them holding it. Never take the display
       lock from the CHIP task (matter_info takes the stack lock under the display lock).
@@ -321,7 +334,29 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
       matter_dev.cpp; Level Control can't go, On/Off links against it). Static .bss +1.1KB vs v0.6.0.
     - To test: re-add the accessory in Home if the old light lingers; tiles per dose; take/undo
       both ways; add/rename/delete a dose live; reboot keeps tiles/rooms; overdue notification;
-      heap during commissioning with 16 doses.
+      heap during commissioning with 16 doses. Home may keep old "<name> <period>" names until it
+      re-reads NodeLabel.
+
+  - **7f** (done, on `matter-accessories`, not released) UI rework for the primary user (the
+    small rows were hard to tap): home as described under Design; plus
+    - Screen sleep (`main/ui_sleep.c`): backlight off after Settings > Screen off (1-60 min or
+      Never, NVS `ui`/`sleep`, default 5); a full-screen shield on the top layer swallows the
+      waking tap; wakes by itself while a dose is due/overdue and never sleeps then.
+    - Settings > Overdue after (5-120 min, NVS `doses`/`overdue`, default 30). Both are
+      tap-to-cycle buttons.
+    - Settings (`main/ui_settings.c`): no Doses/About buttons (home menu now); pairing status in
+      the header; setting buttons + Dark mode in one column; vertical brightness (sun) and volume
+      (speaker) sliders on the right with live %.
+    - Doses list: 30px rows (time, name, weekday for weekly), arrows on the right page by 5; no
+      drag scrolling, so a touch is always a tap. Editor: no period (it is derived from the time:
+      <11:00 AM, <16:00 MID, <20:00 PM, else BED; still saved for the round layout and
+      `same_dose`), name + hour/minute/repeat rollers on the left, a sample row (same 28px/13px as
+      home) level with the name, 6×3 color grid under it.
+    - Palette: 25 colors (12 originals, 12 added, light pink #f472b6 last). The picker offers 18
+      (`DOSE_PICKER_COUNT`); slate, pale sky, mint, lavender, rose, charcoal (least vibrant) and
+      brown are not offered but still render for doses that use them.
+    - Dev reset button and Kconfig `MEDREMINDER_DEV_TOOLS` removed (and `doses_reset`).
+    - Next: shake-to-wake with the QMI8658 IMU (I2C 0x6B).
 
 - Licensing: Waveshare code is Apache-2.0. Keep headers on copied files and list them in a
   `THIRD_PARTY_LICENSES` file. `esp_xiaozhi` has its own license; don't copy it.

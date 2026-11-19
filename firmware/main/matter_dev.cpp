@@ -1,7 +1,8 @@
 /* The device as Apple Home / Matter sees it: a bridge (aggregator endpoint) with bridged devices
  *   "Dose overdue": Contact Sensor, closed normally, open while any dose is overdue, so Home can
  *     notify (turn on notifications for the sensor).
- *   One On/Off Plug-in Unit per dose, labelled "<name> <period>": on = taken today. Turning it on
+ *   One On/Off Plug-in Unit per dose, labelled "<name> <time>" ("Karen 0930", + " TUE" for a
+ *     weekly dose): on = taken today. Turning it on
  *     in Home takes the dose, off undoes it. Doses not due today (weekly) stay off; writes to them
  *     are refused (set back to off).
  * Each dose's endpoint belongs to the dose's uid, saved here as uid -> endpoint id, so Home rooms

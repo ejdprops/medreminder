@@ -20,7 +20,7 @@
 static const char *TAG = "doses";
 
 #if CONFIG_MEDREMINDER_DOSE_TEST
-/* Test schedule: doses 2 min apart, the first due when the clock is set (or at a dev reset), so
+/* Test schedule: doses 2 min apart, the first due when the clock is set (or at boot), so
  * the first goes overdue after 1 min */
 #define OVERDUE_MIN 1
 #define ALERT_REPEAT_MIN 1
