@@ -303,7 +303,7 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
       - Logo: `tools/cyber_logo.py` recolors `averak_labs_neon.png` -> `averak_labs_cyber.png`
         (yellow AVERAK, glowing magenta strokes); About shows it in a dark tile.
 
-  - **7e** (branch `matter-accessories`; flashed, endpoints come up at boot; Home-side testing
+  - **7e** (v1.0.0; endpoints come up at boot; Home-side testing
     still to do) Matter accessories
     (`main/matter_dev.cpp`). The device is a **bridge**: aggregator endpoint 1 (replaces the light
     example's placeholder light) with bridged endpoints:
@@ -337,7 +337,7 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
       heap during commissioning with 16 doses. Home may keep old "<name> <period>" names until it
       re-reads NodeLabel.
 
-  - **7f** (done, on `matter-accessories`, not released) UI rework for the primary user (the
+  - **7f** (done, v1.0.0) UI rework for the primary user (the
     small rows were hard to tap): home as described under Design; plus
     - Screen sleep (`main/ui_sleep.c`): backlight off after Settings > Screen off (1-60 min or
       Never, NVS `ui`/`sleep`, default 5); a full-screen shield on the top layer swallows the
