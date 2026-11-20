@@ -4,8 +4,8 @@
  *     doses as a compact list (display only; hold a taken row 1 s to undo it), with up/down arrows
  *     to page it when more than 5 are due; fewer rows grow to fill the height (otherwise the list takes their space); on the right,
  *     the next dose as a big card, the same height as the list: the one tap target, it marks the
- *     dose taken. For 10 s after a take an Undo strip sits under the card. Node sync status and
- *     the version centered along the bottom.
+ *     dose taken. For 10 s after a take an Undo strip sits under the card. Node sync status
+ *     (node_sync.c) and the version centered along the bottom.
  *   ROUND: ui_round.c. */
 #include <sdkconfig.h>
 #if __has_include("lvgl.h") && CONFIG_MEDREMINDER_UI_LAYOUT_RECT /* boards without a display build no UI */
@@ -22,6 +22,7 @@
 #include "fonts/fonts.h"
 #include "fw_version.h"
 #include "icons/icons.h"
+#include "node_sync.h"
 #include "time_sync.h"
 #include "ui_about.h"
 #include "ui_dose_row.h"
@@ -693,8 +694,35 @@ static void build_doses(lv_obj_t *area)
 }
 
 
-/* Placeholder until node sync is real */
-static const bool s_nodes_synced = true;
+/* ---- Node sync status ---- */
+
+#define SYNC_GREEN 0x22c55e
+#define SYNC_RED 0xef4444
+#define SYNC_GRAY 0x9ca3af
+
+static lv_obj_t *s_sync_pill, *s_sync_label;
+static int s_sync_shown = -1; /* synced * 100 + known, as drawn; -1 = not drawn */
+
+/* "2 nodes synced" (green), "1 of 2 nodes synced" (red), "No nodes" (gray) */
+static void update_sync_status(void)
+{
+    int synced, known;
+    node_sync_status(&synced, &known);
+    if (synced * 100 + known == s_sync_shown) {
+        return;
+    }
+    s_sync_shown = synced * 100 + known;
+    uint32_t tint = known == 0 ? SYNC_GRAY : synced == known ? SYNC_GREEN : SYNC_RED;
+    if (known == 0) {
+        lv_label_set_text(s_sync_label, "No nodes");
+    } else if (synced == known) {
+        lv_label_set_text_fmt(s_sync_label, "%d node%s synced", known, known == 1 ? "" : "s");
+    } else {
+        lv_label_set_text_fmt(s_sync_label, "%d of %d nodes synced", synced, known);
+    }
+    lv_obj_set_style_bg_color(s_sync_pill, lv_color_hex(tint), 0);
+    lv_obj_set_style_border_color(s_sync_pill, lv_color_hex(tint), 0);
+}
 
 /* Node sync status (faint green/red outline instead of a dot) with the version below it,
  * centered on the screen */
@@ -703,23 +731,21 @@ static void build_bottom_row(lv_obj_t *scr)
     lv_obj_t *box = plain_obj(scr);
     lv_obj_set_size(box, 320, 42);
     lv_obj_set_pos(box, 0, 198);
-    uint32_t tint = s_nodes_synced ? 0x22c55e : 0xef4444;
-    lv_obj_t *status = plain_obj(box);
-    lv_obj_set_size(status, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_hor(status, 10, 0);
-    lv_obj_set_style_pad_ver(status, 3, 0);
-    lv_obj_set_style_radius(status, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_opa(status, LV_OPA_10, 0);
-    lv_obj_set_style_bg_color(status, lv_color_hex(tint), 0);
-    lv_obj_set_style_border_width(status, 1, 0);
-    lv_obj_set_style_border_opa(status, LV_OPA_40, 0);
-    lv_obj_set_style_border_color(status, lv_color_hex(tint), 0);
-    label(status, s_nodes_synced ? "3 nodes synced" : "Nodes not synced", &inter_11_semibold, UI_T->muted);
-    lv_obj_align(status, LV_ALIGN_BOTTOM_MID, 0, -18);
+    s_sync_pill = plain_obj(box);
+    lv_obj_set_size(s_sync_pill, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_hor(s_sync_pill, 10, 0);
+    lv_obj_set_style_pad_ver(s_sync_pill, 3, 0);
+    lv_obj_set_style_radius(s_sync_pill, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(s_sync_pill, LV_OPA_10, 0);
+    lv_obj_set_style_border_width(s_sync_pill, 1, 0);
+    lv_obj_set_style_border_opa(s_sync_pill, LV_OPA_40, 0);
+    s_sync_label = label(s_sync_pill, "", &inter_11_semibold, UI_T->muted);
+    lv_obj_align(s_sync_pill, LV_ALIGN_BOTTOM_MID, 0, -18);
+    s_sync_shown = -1;
+    update_sync_status();
 
     lv_obj_t *ver = label(box, fw_version_short(), &inter_8, UI_T->caption);
     lv_obj_align(ver, LV_ALIGN_BOTTOM_MID, 0, -4);
-
 }
 
 /* Every second: dose states and alerts, then the date and time labels (dashes until the first
@@ -731,6 +757,7 @@ static void clock_timer_cb(lv_timer_t *t)
     if (doses_tick(now)) { /* also reports schedule edits before the clock is set */
         refresh(true);
     }
+    update_sync_status();
     if (!time_is_valid()) {
         return;
     }

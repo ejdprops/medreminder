@@ -15,6 +15,7 @@
 
 #include "audio.h"
 #include "matter_dev.h"
+#include "node_sync.h"
 #include "time_sync.h"
 
 static const char *TAG = "doses";
@@ -533,6 +534,39 @@ void doses_delete(int index)
     s_dirty = true;
 }
 
+void doses_get_snapshot(doses_snapshot_t *snap)
+{
+    memset(snap, 0, sizeof(*snap));
+    snap->date = s_date;
+    snap->taken = s_taken;
+    snap->count = (uint8_t)s_count;
+    snap->overdue_min = (uint8_t)s_overdue_min;
+    memcpy(snap->defs, s_defs, s_count * sizeof(dose_def_t));
+}
+
+void doses_apply_snapshot(const doses_snapshot_t *snap)
+{
+    s_count = (snap->count < DOSE_MAX ? snap->count : DOSE_MAX);
+    memcpy(s_defs, snap->defs, s_count * sizeof(dose_def_t));
+    s_taken = snap->taken & ((s_count < 32 ? (1u << s_count) : 0) - 1);
+    s_date = snap->date;
+    if (snap->overdue_min > 0) {
+        s_overdue_min = snap->overdue_min;
+    }
+    save_schedule();
+    save_taken();
+    nvs_handle_t nvs;
+    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) == ESP_OK) {
+        nvs_set_u8(nvs, NVS_KEY_OVERDUE, (uint8_t)s_overdue_min);
+        nvs_commit(nvs);
+        nvs_close(nvs);
+    }
+    compute_states(time(NULL), time_is_valid());
+    s_dirty = true;
+    ESP_LOGI(TAG, "synced from the main unit: %d doses, date %u, taken 0x%02x", s_count, (unsigned)s_date,
+             (unsigned)s_taken);
+}
+
 /* Apple Home's view: one accessory per dose, "<name> <time>" (+ weekday for weekly doses), on
  * when taken today; plus whether any dose is overdue */
 static void publish(void)
@@ -564,7 +598,7 @@ static void publish(void)
     matter_dev_publish(doses, s_count, overdue);
 }
 
-/* Take/undo from Home. Only doses due today; anything else is refused and publish() sets Home's
+/* Take/undo from Home (and takes from nodes). Only doses due today; anything else is refused and publish() sets Home's
  * switch back. */
 static bool apply_home_requests(void)
 {
@@ -578,15 +612,44 @@ static bool apply_home_requests(void)
             }
         }
     }
+    /* Taken from a node (double tap); same rules */
+    while (node_sync_next_take(&uid)) {
+        for (int i = 0; i < s_count; i++) {
+            if (s_defs[i].uid == uid && due_today(i)) {
+                changed |= doses_take(i);
+            }
+        }
+    }
     return changed;
+}
+
+/* Node: the main unit's newest state, if one arrived */
+static void apply_sync(void)
+{
+#if CONFIG_MEDREMINDER_ROLE_NODE
+    static doses_snapshot_t snap; /* static: keep it off the UI task stack */
+    if (node_sync_take_state(&snap)) {
+        doses_apply_snapshot(&snap);
+    }
+#endif
+}
+
+/* What this device holds, for node sync (the main unit sends it; a node reports it back) */
+static void publish_sync(void)
+{
+    static doses_snapshot_t snap;
+    doses_get_snapshot(&snap);
+    node_sync_publish(&snap);
 }
 
 bool doses_tick(time_t now)
 {
+    apply_sync();
     bool changed = s_dirty | apply_home_requests();
     s_dirty = false;
     if (!time_is_valid()) {
         publish();
+        publish_sync();
         return changed;
     }
 #if CONFIG_MEDREMINDER_DOSE_TEST
@@ -621,6 +684,7 @@ bool doses_tick(time_t now)
     }
 
     publish();
+    publish_sync();
     if (!overdue) {
         s_next_alert = 0;
     } else if (!s_next_alert || now >= s_next_alert) {

@@ -6,6 +6,7 @@
 #include <esp_log.h>
 #include <lvgl.h>
 #include <nvs.h>
+#include <sdkconfig.h>
 
 #include "doses.h"
 
@@ -17,6 +18,14 @@
 static const char *TAG = "ui_sleep";
 
 #define DEFAULT_MINUTES 5
+
+/* Asleep: the main unit turns the backlight off (a tap wakes it). Nodes have no touch and are read
+ * across the room, so they dim instead; full brightness again while a dose is due. */
+#if CONFIG_MEDREMINDER_ROLE_NODE
+#define ASLEEP_PERCENT 25
+#else
+#define ASLEEP_PERCENT 0
+#endif
 
 static int s_minutes = DEFAULT_MINUTES;
 static bool s_asleep;
@@ -46,8 +55,12 @@ static void sleep_now(void)
 #ifdef HAVE_BACKLIGHT
     s_brightness = bsp_display_brightness_get();
 #endif
-    backlight(0);
+    backlight(ASLEEP_PERCENT);
     s_asleep = true;
+    if (ASLEEP_PERCENT > 0) {
+        ESP_LOGI(TAG, "screen dimmed to %d%% after %d min idle", ASLEEP_PERCENT, s_minutes);
+        return; /* still readable: no shield, nothing to swallow */
+    }
     s_shield = lv_obj_create(lv_layer_top());
     lv_obj_remove_style_all(s_shield);
     lv_obj_set_size(s_shield, LV_PCT(100), LV_PCT(100));

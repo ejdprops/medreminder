@@ -9,6 +9,7 @@
 #include <esp_err.h>
 #include <esp_heap_caps.h>
 #include <esp_log.h>
+#include <esp_system.h>
 #include <nvs_flash.h>
 
 #include <esp_matter.h>
@@ -21,6 +22,7 @@
 #include <app_priv.h>
 #include <matter_dev.h>
 #include <matter_info.h>
+#include <node_sync.h>
 #include <ui.h>
 #include <fw_version.h>
 #include <time_sync.h>
@@ -45,14 +47,19 @@ using namespace chip::DeviceLayer;
 
 static const char *TAG = "app_main";
 
-/* Internal RAM is the scarce resource once display/audio are added; PSRAM listed separately. */
+/* Internal RAM is the scarce resource once display/audio are added; PSRAM listed separately. The
+ * last reset's cause rides along: the C6 loses its boot log when USB re-enumerates. */
 static void log_heap(const char *state)
 {
-    ESP_LOGI(TAG, "heap[%s] internal free %u min %u largest %u | psram free %u", state,
+    static const char *const resets[] = {"?", "power-on", "ext", "sw", "panic", "int-wdt", "task-wdt", "wdt",
+                                         "deep-sleep", "brownout", "sdio", "usb", "jtag", "efuse", "pwr-glitch",
+                                         "cpu-lockup"};
+    unsigned r = esp_reset_reason();
+    ESP_LOGI(TAG, "heap[%s] internal free %u min %u largest %u | psram free %u | reset %s", state,
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), r < sizeof(resets) / sizeof(*resets) ? resets[r] : "?");
 }
 
 using namespace esp_matter;
@@ -241,6 +248,7 @@ extern "C" void app_main()
     log_heap("matter started");
 
     matter_dev_start();
+    node_sync_start();
 
     time_sync_start();
     ui_start();

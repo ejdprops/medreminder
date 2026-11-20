@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <time.h>
 
@@ -86,6 +87,22 @@ void doses_set_overdue_min(int minutes);
 
 /* A dose due today has reached its time and isn't taken (the screen stays awake for it) */
 bool doses_any_due(time_t now);
+
+/* Node sync (node_sync.c): what a node mirrors from the main unit. Sent as raw bytes up to
+ * defs[count] (both ends run this firmware); unused defs are zero. */
+typedef struct {
+    uint32_t date;   /* YYYYMMDD the taken bits belong to; 0 before the clock is set */
+    uint32_t taken;  /* bit i: defs[i] taken */
+    uint8_t count;
+    uint8_t overdue_min;
+    uint8_t reserved[2];
+    dose_def_t defs[DOSE_MAX];
+} doses_snapshot_t;
+#define DOSES_SNAPSHOT_LEN(count) (offsetof(doses_snapshot_t, defs) + (count) * sizeof(dose_def_t))
+
+void doses_get_snapshot(doses_snapshot_t *s);
+/* Node: replace the schedule, taken flags and overdue setting with the main unit's (saved) */
+void doses_apply_snapshot(const doses_snapshot_t *s);
 
 /* Format minutes after midnight as 24 h military time, "0600" */
 void dose_format_time(int minute, char *buf, int len);

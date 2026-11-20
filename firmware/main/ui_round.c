@@ -1,10 +1,12 @@
 /* Home screen for round 240x240 displays without touch (CONFIG_MEDREMINDER_UI_LAYOUT_ROUND; the
  * C6 node). Made to be read across the room:
- *   - a thick ring around the edge in the next dose's color (red and pulsing when overdue, green
- *     when the day is done)
+ *   - the whole screen in the next dose's color, like its pill on the main unit; text white or dark
+ *     by the color's brightness (ui_dose_name_color). Overdue: a red ring blinks around the edge.
+ *     Nothing left today: dark gray with a green ring.
  *   - date and clock at the top; the next dose's time and name large in the middle, with "in 25 min"
- *     / "Due now" / "Late 42 min" under it
- *   - today's doses as dots along the bottom (filled when taken), the version under them
+ *     / "Due now" / a "Late 42 min" badge under it
+ *   - today's doses as dots along the bottom (filled when taken), the version under them, and a
+ *     "Not synced" badge when the main unit hasn't been heard from (node_sync.c)
  * Not commissioned yet: the Matter QR and manual code instead (no touch, so no Settings page to
  * find them on); a static "Pairing" screen while Home sets it up (nothing animates: the C6 has one
  * core for Matter and LVGL), then "Paired" for 10 s. */
@@ -22,8 +24,12 @@
 #include "fonts/fonts.h"
 #include "fw_version.h"
 #include "icons/icons.h"
+#include "imu_tap.h"
 #include "matter_info.h"
+#include "node_sync.h"
 #include "time_sync.h"
+#include "ui_dose_row.h"
+#include "ui_sleep.h"
 #include "ui_theme.h"
 
 static const char *TAG = "ui_round";
@@ -31,11 +37,14 @@ static const char *TAG = "ui_round";
 #define SIZE 240
 #define RING_W 14
 #define OVERDUE_RED 0xef4444
-#define LATE_TEXT 0xdc2626
 #define DOT 12
 #define DOT_GAP 5
 #define DOTS_MAX 9 /* what fits across the circle at the dots' height; more: "3/12 taken" */
-#define DOTS_Y 186
+#define DOTS_Y 190
+#define DONE_BG 0x1f2937 /* nothing left today: dark, not a bright screen in the evening */
+#define DONE_TEXT 0xffffff
+#define DONE_TEXT2 0xd1d5db
+#define BADGE_TEXT 0xb91c1c
 #define QR_SIZE 136
 #define PAIRED_MS 10000
 
@@ -46,6 +55,8 @@ static lv_obj_t *s_date_label, *s_time_label, *s_when_label;
 static int s_next = -1;      /* dose in the middle; -1 = none left today */
 static int s_last_minute = -1; /* clock labels last drawn for this minute */
 static screen_mode_t s_mode;
+static bool s_connected;        /* node_sync_connected() as last drawn */
+static uint32_t s_fg, s_fg2;    /* text on the current background: main, secondary */
 static unsigned s_completions;  /* matter_pairing_completions() last seen */
 static uint32_t s_paired_at;     /* tick when the last pairing completed */
 
@@ -72,6 +83,24 @@ static lv_obj_t *label_at(lv_obj_t *parent, const char *text, const lv_font_t *f
     lv_obj_t *l = label(parent, text, font, color);
     lv_obj_align(l, LV_ALIGN_TOP_MID, 0, y);
     return l;
+}
+
+/* White pill with red text ("Late 42 min", "Not synced"): readable on any dose color */
+static lv_obj_t *badge_at(lv_obj_t *parent, const char *text, const lv_font_t *font, int32_t y, lv_obj_t **text_label)
+{
+    lv_obj_t *b = plain_obj(parent);
+    lv_obj_set_size(b, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(b, lv_color_white(), 0);
+    lv_obj_set_style_pad_hor(b, 8, 0);
+    lv_obj_set_style_pad_ver(b, 2, 0);
+    lv_obj_t *l = label(b, text, font, BADGE_TEXT);
+    if (text_label) {
+        *text_label = l;
+    }
+    lv_obj_align(b, LV_ALIGN_TOP_MID, 0, y);
+    return b;
 }
 
 /* Overdue: the ring blinks between full and faint. Not a smooth fade: redrawing the whole ring every
@@ -135,8 +164,8 @@ static void update_when_label(void)
     lv_label_set_text(s_when_label, buf);
 }
 
-/* Today's doses along the bottom: filled when taken, outlined in the dose color otherwise (red for
- * overdue), the middle dose a size larger */
+/* Today's doses along the bottom in the text color: filled when taken, outlined otherwise, the
+ * middle dose a size larger (dose colors would vanish against a background of the same color) */
 static void build_dots(lv_obj_t *scr)
 {
     int today = 0, taken = 0;
@@ -152,7 +181,7 @@ static void build_dots(lv_obj_t *scr)
     if (today > DOTS_MAX) {
         char buf[24];
         snprintf(buf, sizeof(buf), "%d/%d taken", taken, today);
-        label_at(scr, buf, &inter_12_bold, UI_T->muted, DOTS_Y);
+        label_at(scr, buf, &inter_12_bold, s_fg2, DOTS_Y);
         return;
     }
     lv_obj_t *row = plain_obj(scr);
@@ -165,23 +194,21 @@ static void build_dots(lv_obj_t *scr)
         if (!dose_due_today(i)) {
             continue;
         }
-        uint32_t color = dose_colors[dose_def(i)->color];
-        dose_state_t st = dose_state(i);
         int32_t d = i == s_next ? DOT + 4 : DOT;
         lv_obj_t *dot = plain_obj(row);
         lv_obj_set_size(dot, d, d);
         lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
-        if (st == DOSE_TAKEN) {
+        if (dose_state(i) == DOSE_TAKEN) {
             lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
-            lv_obj_set_style_bg_color(dot, lv_color_hex(color), 0);
+            lv_obj_set_style_bg_color(dot, lv_color_hex(s_fg), 0);
         } else {
             lv_obj_set_style_border_width(dot, 2, 0);
-            lv_obj_set_style_border_color(dot, lv_color_hex(st == DOSE_OVERDUE ? OVERDUE_RED : color), 0);
+            lv_obj_set_style_border_color(dot, lv_color_hex(s_fg), 0);
         }
     }
 }
 
-/* Nothing left today: green ring, check, tomorrow's first dose */
+/* Nothing left today: dark background, green ring, check, tomorrow's first dose */
 static void build_done(lv_obj_t *scr, bool any_today)
 {
     build_ring(scr, UI_T->ok, false);
@@ -191,7 +218,7 @@ static void build_done(lv_obj_t *scr, bool any_today)
     lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
     lv_image_set_scale(img, 512); /* 20px icon at 40px */
     lv_obj_align(img, LV_ALIGN_TOP_MID, 0, 84);
-    label_at(scr, any_today ? "All done today" : "No doses today", &inter_23_semibold, UI_T->text, 120);
+    label_at(scr, any_today ? "All done today" : "No doses today", &inter_23_semibold, s_fg, 124);
 
     if (!time_is_valid()) {
         return;
@@ -204,7 +231,7 @@ static void build_done(lv_obj_t *scr, bool any_today)
         char text[40], t[8];
         dose_format_time(dose_def(first)->minute, t, sizeof(t));
         snprintf(text, sizeof(text), "Tomorrow %s %s", t, dose_name(first));
-        lv_obj_t *l = label_at(scr, text, &inter_14_semibold, UI_T->muted, 152);
+        lv_obj_t *l = label_at(scr, text, &inter_14_semibold, s_fg2, 156);
         lv_obj_set_width(l, 180);
         lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
@@ -214,16 +241,22 @@ static void build_done(lv_obj_t *scr, bool any_today)
 static void build_next(lv_obj_t *scr, int i)
 {
     bool overdue = dose_state(i) == DOSE_OVERDUE;
-    build_ring(scr, overdue ? OVERDUE_RED : dose_colors[dose_def(i)->color], overdue);
+    if (overdue) {
+        build_ring(scr, OVERDUE_RED, true);
+    }
 
     char t[8];
     dose_format_time(dose_def(i)->minute, t, sizeof(t));
-    label_at(scr, t, &inter_48_bold, UI_T->text, 70);
-    lv_obj_t *name = label_at(scr, dose_name(i), &inter_30_semibold, UI_T->text, 122);
+    label_at(scr, t, &inter_48_bold, s_fg, 76);
+    lv_obj_t *name = label_at(scr, dose_name(i), &inter_30_semibold, s_fg, 128);
     lv_obj_set_width(name, 190);
     lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-    s_when_label = label_at(scr, "", &inter_16_bold, overdue ? LATE_TEXT : UI_T->muted, 158);
+    if (overdue) {
+        badge_at(scr, "", &inter_16_bold, 164, &s_when_label);
+    } else {
+        s_when_label = label_at(scr, "", &inter_16_bold, s_fg2, 166);
+    }
     update_when_label();
 }
 
@@ -314,9 +347,13 @@ static void build(void)
         break;
     }
 
-    s_date_label = label_at(s_screen, "--- -- ---", &inter_12_bold, UI_T->date, 24);
-    s_time_label = label_at(s_screen, "---- hrs", &inter_14_semibold, UI_T->time, 40);
     s_next = doses_next();
+    uint32_t bg = s_next >= 0 ? dose_colors[dose_def(s_next)->color] : DONE_BG;
+    s_fg = s_next >= 0 ? ui_dose_name_color(s_next) : DONE_TEXT;
+    s_fg2 = s_next >= 0 ? ui_dose_slot_color(s_next) : DONE_TEXT2;
+    lv_obj_set_style_bg_color(s_screen, lv_color_hex(bg), 0);
+    s_date_label = label_at(s_screen, "--- -- ---", &inter_16_bold, s_fg, 28);
+    s_time_label = label_at(s_screen, "---- hrs", &inter_23_semibold, s_fg, 48);
     bool any_today = false;
     for (int i = 0; i < doses_count(); i++) {
         any_today |= dose_due_today(i);
@@ -327,7 +364,27 @@ static void build(void)
         build_done(s_screen, any_today);
     }
     build_dots(s_screen);
-    label_at(s_screen, fw_version_short(), &inter_8, UI_T->caption, 210);
+    s_connected = node_sync_connected();
+    if (!s_connected) {
+        badge_at(s_screen, "Not synced", &inter_11_semibold, 210, NULL);
+    }
+    label_at(s_screen, fw_version_short(), &inter_8, s_fg2, s_connected ? 214 : 228);
+}
+
+/* Double tap on the case: ask the main unit to take the next dose; the screen moves on when its new
+ * state arrives (about a second). Without the main unit nothing happens ("Not synced" shows). */
+static void on_double_tap(void)
+{
+    ui_sleep_wake("double tap");
+    if (s_mode != MODE_DOSES || s_next < 0 || !node_sync_connected()) {
+        ESP_LOGI(TAG, "double tap: nothing to take");
+        return;
+    }
+    ESP_LOGI(TAG, "double tap: taking %s", dose_name(s_next));
+    node_sync_request_take(dose_def(s_next)->uid);
+    if (s_when_label) {
+        lv_label_set_text(s_when_label, "Taking...");
+    }
 }
 
 /* Every second: pairing and dose states (rebuild on change), then the clock labels once a minute */
@@ -337,9 +394,13 @@ static void tick_cb(lv_timer_t *t)
     time_t now = time(NULL);
     bool changed = doses_tick(now);
     screen_mode_t mode = current_mode();
-    if (mode != s_mode || (mode == MODE_DOSES && (changed || doses_next() != s_next))) {
+    if (mode != s_mode ||
+        (mode == MODE_DOSES && (changed || doses_next() != s_next || node_sync_connected() != s_connected))) {
         s_mode = mode;
         build();
+    }
+    if (imu_tap_take_double()) {
+        on_double_tap();
     }
     if (!s_time_label || !time_is_valid()) {
         return;
