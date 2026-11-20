@@ -3,8 +3,11 @@
 Medication reminder hardware + firmware. Devices are Matter-over-Thread accessories in Apple Home.
 The repo holds the KiCad V1 master board (root) and the ESP-IDF/esp-matter firmware (`firmware/`).
 
-Firmware development currently runs on a **Waveshare ESP32-C5-Touch-LCD-2.8** dev board.
-Planned additional boards: Seeed XIAO ESP32-C6 or a Waveshare ESP32-H2 (undecided).
+Firmware runs on two dev boards, both Matter-over-Thread:
+- **Main unit:** Waveshare ESP32-C5-Touch-LCD-2.8 (`boards/c5_waveshare`): schedule editing, alert
+  sound, dose accessories in Apple Home.
+- **Node:** Waveshare ESP32-C6-LCD-1.28 (`boards/c6_round`; the user's board is a kctozo clone with
+  that silkscreen): round 240x240, **no touch**, shows the doses (see 7g). More nodes may follow.
 
 ## How the user works
 
@@ -33,6 +36,7 @@ cd firmware
 ./build.sh c5_waveshare -p /dev/cu.usbmodem1101 flash        # flash (keeps Matter pairing)
 ./build.sh c5_waveshare -p /dev/cu.usbmodem1101 erase-flash flash   # factory reset + flash
 ./build.sh c5_waveshare fresh                                # regenerate sdkconfig after editing defaults
+./build.sh c6_round ...                                      # same for the node (one board plugged in at a time)
 python tools/serial_capture.py --seconds 60 --reset --out /tmp/boot.log   # read logs (non-interactive)
 ```
 
@@ -40,12 +44,17 @@ python tools/serial_capture.py --seconds 60 --reset --out /tmp/boot.log   # read
   `sdkconfig.defaults` + `boards/<board>/sdkconfig.defaults.<NET>` (NET=thread default) +
   `boards/<board>/sdkconfig.defaults`. Edit those, never the generated sdkconfig. After editing
   defaults, use `fresh`.
+- One component lock per board: `boards/<board>/dependencies.lock` (set in `firmware/CMakeLists.txt`
+  via `DEPENDENCIES_LOCK`); `managed_components/` is shared.
 - **Do not use `idf.py monitor`** (interactive, never exits). Use `tools/serial_capture.py`.
   Close any monitor the user has open first; only one process can hold the port.
-- Serial port: `/dev/cu.usbmodem1101` (C5 native USB-Serial/JTAG). Console **input** is on UART
-  GPIO11/12, not USB. Do not set `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`: with the Matter shell enabled
+- Serial port: `/dev/cu.usbmodem1101` (native USB-Serial/JTAG; the C5 and the C6 both show up
+  there, check with `esptool.py chip_id` which one is plugged in). On the C5, console **input** is
+  on UART GPIO11/12, not USB. Do not set `CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y`: with the Matter shell enabled
   it spins redrawing the prompt, starves the CPU and breaks commissioning (tested).
 - First Matter build is ~15-25 min; incremental builds are fast.
+- `serial_capture.py --reset` on the C6 can lose the log after the bootloader (USB re-enumerates);
+  capture again without `--reset`.
 
 ## Firmware versions
 
@@ -69,36 +78,46 @@ firmware/
 ├── build.sh
 ├── sdkconfig.defaults    common (from esp-matter light example)
 ├── main/                 app_main.cpp (Matter node), matter_dev.cpp (bridge: dose accessories), ui.c
-│   │                     (display startup), ui_home.c (home screen), ui_settings.c, ui_doses.c
-│   │                     (schedule list + editor), ui_sleep.c, icons/ (generated A8 images)
+│   │                     (display startup), ui_home.c (RECT home), ui_round.c (ROUND home, node),
+│   │                     ui_settings.c, ui_doses.c (schedule list + editor), ui_sleep.c,
+│   │                     mem_caps.h (PSRAM or internal), icons/ (generated A8 images)
 │   ├── icons/svg/        icon sources; regenerate with tools/svg_icons.py (see below)
 │   └── fonts/            generated Inter LVGL fonts (tools/gen_fonts.sh) + OFL license
 ├── tools/serial_capture.py, tools/svg_icons.py, tools/gen_fonts.sh
 ├── THIRD_PARTY_LICENSES  copied third-party code (Waveshare BSP, ...)
-└── boards/c5_waveshare/
-    ├── target                     esp32c5
-    ├── esp_matter_device.cmake    led_type hollow_led (no-op), button_type iot
-    ├── sdkconfig.defaults         32MB flash, PSRAM 80MHz, custom partitions, coredump to flash
-    ├── sdkconfig.defaults.thread  Thread-only Matter config
-    ├── partitions.csv
+├── boards/c5_waveshare/
+│   ├── target                     esp32c5
+│   ├── esp_matter_device.cmake    led_type hollow_led (no-op), button_type iot
+│   ├── sdkconfig.defaults         32MB flash, PSRAM 80MHz, custom partitions, coredump to flash
+│   ├── sdkconfig.defaults.thread  Thread-only Matter config
+│   ├── partitions.csv, CHIPProjectConfig.h, dependencies.lock
+│   └── components/
+│       ├── device/                       pin map for esp-matter's LED/button HAL
+│       ├── esp32_c5_touch_lcd_2_8/       Waveshare BSP (trimmed; panel/touch rotation added)
+│       └── waveshare__esp_lcd_touch_cst3530/
+└── boards/c6_round/               same files; 16MB flash, no PSRAM, ROLE_NODE + LAYOUT_ROUND
     └── components/
-        ├── device/                       pin map for esp-matter's LED/button HAL
-        ├── esp32_c5_touch_lcd_2_8/       Waveshare BSP (trimmed; panel/touch rotation added)
-        └── waveshare__esp_lcd_touch_cst3530/
+        ├── device/                       BOOT GPIO9, no LED
+        └── esp32_c6_lcd_1_28/            BSP rewritten from Waveshare's: display, backlight, I2C only
 ```
 
 - UI startup: `ui_start()` (after `esp_matter::start`) spawns a one-shot `ui_init` task with an 8KB
   PSRAM stack. `bsp_display_show()` renders the first frame on the calling task, which overflowed
   main's 3.5KB stack (boot loop, "Stack protection fault" in task main). LVGL's own task stack is
   in PSRAM too. UI code is guarded with `__has_include` so display-less boards still build.
-- Landscape: `ROTATE_90` with the USB port on the right. The LVGL adapter does not rotate SPI
+- Per board, from the BSP header: `BSP_LCD_ROTATION` (C5 `ROTATE_90`, C6 `ROTATE_0`) and
+  `BSP_CAPS_AUDIO` (audio.c builds only with it). Task stacks and big buffers use `MEM_CAPS_BULK`
+  (`main/mem_caps.h`): PSRAM if the board has it, else internal.
+- Kconfig `MEDREMINDER_ROLE`: MAIN (C5) or NODE (C6: `matter_dev` keeps the empty aggregator and
+  adds no dose endpoints, so Home doesn't get duplicates).
+- C5 landscape: `ROTATE_90` with the USB port on the right. The LVGL adapter does not rotate SPI
   panels; the BSP sets ST7789 swap/mirror and the matching CST3530 touch flags.
 - Icons: 24x24 stroke SVGs (from the design artboard) -> 20px A8 C arrays, colored with
   `image_recolor`. Needs Pillow + svg.path in a throwaway venv (not the IDF env):
   `python -m venv /tmp/v && /tmp/v/bin/pip install pillow svg.path &&
   /tmp/v/bin/python tools/svg_icons.py --size 20 main/icons/svg/*.svg --out main/icons`.
   New icons need a `LV_IMAGE_DECLARE` in `main/icons/icons.h`; new source files need
-  `./build.sh c5_waveshare reconfigure build` (main globs its source dirs).
+  `./build.sh <board> reconfigure build` (main globs its source dirs).
 
 New board = new folder under `boards/` with the same files. Nothing in `~/esp/esp-matter` is modified
 for this project (an old `device_hal/device/waveshare_c5_lcd28/` there is a leftover; ignore it).
@@ -129,6 +148,32 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
   default so NVS (pairing) survives reflashing; ota_0/ota_1 8MB each; fctry 24K; coredump 64K;
   storage ~15.75MB (spiffs subtype) for UI assets and alert sounds.
 
+## Waveshare ESP32-C6-LCD-1.28 facts (node)
+
+ESP32-C6 QFN40 rev 0.2, single core 160MHz, 512KB SRAM, **no PSRAM**, 16MB flash. Pin map from
+`waveshareteam/ESP32-C6-LCD-1.28` HARDWARE_REFERENCE.md (same pins as the -Touch- variant minus touch):
+
+| Function | GPIO |
+|---|---|
+| LCD GC9A01 SPI2 MOSI / SCLK / CS / DC / RST | 21 / 11 / 10 / 19 / 20 |
+| LCD backlight (LEDC PWM) | 7 |
+| I2C SDA / SCL (QMI8658 IMU 0x6B, PCF85063 RTC 0x51) | 18 / 8 |
+| IMU INT1 / INT2, RTC INT | 5 / 4, 6 |
+| TF card CS / MISO (shares LCD SPI) | 15 / 22 |
+| Battery ADC (200K/100K divider) | 0 |
+| BOOT button | 9 |
+| UART TX / RX | 16 / 17 |
+
+- **GPIO23 is the charger status line on this board.** Waveshare's BSP (and even their non-touch
+  demo) drives it as touch reset; ours leaves touch out.
+- No speaker/codec: the node alerts by screen only (a buzzer on GPIO1-3 is possible later).
+- Input: no touch; BOOT button and the IMU (tap/shake detection, planned) only.
+- RAM: idle internal free ~175KB with display + LVGL + Matter (no dose endpoints), 150KB with them.
+  Static DIRAM ~210KB.
+- **LVGL (priority 6) outranks the CHIP task (priority 1) on one core:** anything redrawing every
+  frame starves Matter (task watchdog on `lvgl`/`swdraw`; pairing timed out). The overdue ring
+  blinks on a 700ms timer instead of fading; the pairing screens are static.
+
 ## Matter / Apple Home status
 
 - esp-matter v1.5 (Matter 1.5), Thread only (`ENABLE_WIFI_STATION` off), FTD (becomes a Thread router).
@@ -156,6 +201,12 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
     fails again, check those two first, then repeat the iPhone browse/ping test.
     Heap min during pairing with the display running: 26KB.
   - Eve's Thread view has never shown the network, even when pairing worked: it is not evidence.
+- C6 node (2026-11-19): attempt 1 timed out (LVGL starving Matter, fixed). Attempt 2: the node
+  couldn't attach to a Thread router for ~25 s, formed its own partition, merged ~17 s later; Home
+  fabric then completed, but the Keychain fabric got AddNOC and no CASE (30 s fail-safe expired,
+  both fabrics removed, "Pairing failed"), as on the C5 before. Attempt 3 (after the user was asked
+  to recheck the iPhone settings above) completed both fabrics in ~12 s. Named "Med Dot 1"; as an
+  empty bridge it doesn't appear in a room (Home Settings > Hubs & Bridges).
 - Harmless log noise: `chip[DIS] ... Failed to advertise ...: 3` before joining Thread,
   `Failed to process UDP - Duplicated` (two border routers), unknown-cluster read of `0x1349_FC00`
   (Apple-only cluster), `Long dispatch time`, SEC_CERT_DAC_PROVIDER / unknown kconfig symbol warnings,
@@ -189,10 +240,10 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
     done today" card with tomorrow's first dose.
   - Bottom: node-sync status (faint green/red outline) and version, centered on the screen.
   - Taps count only when held >= 100ms (`main/ui_tap.c`, `UI_TAP_MIN_MS`). Layout per board:
-    Kconfig `MEDREMINDER_UI_LAYOUT` RECT (C5) or ROUND (old circle layout, kept for round
-    displays, still has a settings gear). Boot splash: Averak Labs logo (cyberpunk recolor) for 5 s
+    Kconfig `MEDREMINDER_UI_LAYOUT` RECT (C5) or ROUND (node, `main/ui_round.c`, see 7g). Boot splash: Averak Labs logo (cyberpunk recolor) for 5 s
     (`SPLASH_MS` in `main/ui.c`), then a fade to home.
-  - Earlier home layouts (rotating pills v0.4.0, full-width today list v0.6.0) are in git history.
+  - Earlier home layouts (rotating pills v0.4.0, full-width today list v0.6.0, the old ROUND
+    circle mock-up) are in git history.
 - Roadmap:
   - **7a** (done) Waveshare BSP (display, touch, CH32V003 expander) in
     `boards/c5_waveshare/components/` (sensors/Wi-Fi stripped), static test screen from
@@ -213,7 +264,8 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
       (`main/ui_home.c`); internal RAM unchanged (62.9KB idle, min 29.5KB).
     - 7b.3 (done) project fonts: Inter 4.1 (OFL) via `tools/gen_fonts.sh <Inter ttf dir>` (Node `npx
       lv_font_conv@1.5.3`, Node from Homebrew) -> `main/fonts/` (committed). Sizes/weights from the
-      design: 8, 9 regular; 9, 10, 11, 12, 13, 14, 16, 23 semibold; 12, 16 bold. Inter 4.1 TTFs:
+      design: 8, 9 regular; 9, 10, 11, 12, 13, 14, 16, 23, 30 semibold; 12, 16, 48 bold (30/48
+      for the node). Inter 4.1 TTFs:
       download the release zip from github.com/rsms/inter (`extras/ttf/`); not kept in the repo. Glyphs: ASCII + "·" + "✓" only; add
       ranges in the script for new characters. Built-in Montserrat: only LVGL's default 14 left.
     - 7b.4 (done) settings page (`main/ui_settings.c`): Matter QR + manual code generated on the
@@ -357,6 +409,25 @@ Wi-Fi 6 dual band, BLE 5, 802.15.4 (Thread). Pin map from Waveshare's BSP
       brown are not offered but still render for doses that use them.
     - Dev reset button and Kconfig `MEDREMINDER_DEV_TOOLS` removed (and `doses_reset`).
     - Next: shake-to-wake with the QMI8658 IMU (I2C 0x6B).
+
+  - **7g** (in progress, branch `c6-node`) C6 round node (`boards/c6_round`, see the C6 facts).
+    - Step 1 (done) bring-up: display, backlight, orientation, colors verified; Matter + LVGL fit.
+    - Step 2 (done) node screen (`main/ui_round.c`, 240x240, read across the room): a 14px ring
+      around the edge in the next dose's color (red, blinking when overdue; green when done); date
+      and "1412 hrs" at the top; the next dose's time (48px) and name (30px) in the middle with
+      "in 25 min" / "Due now" / "Late 42 min"; today's doses as dots along the bottom (filled =
+      taken, next one larger; more than 9: "3/12 taken"); version. Not paired: Matter QR + manual
+      code (no touch, so no Settings). During setup a static "Pairing / Finish on your phone",
+      then "Pairing successful" for 10 s (`matter_pairing_active()` / `_completions()` in
+      matter_info.cpp, fed by `app_event_cb`: pairing runs from the PASE session until
+      CommissioningComplete or fail-safe expiry; the session's end only counts if the fail-safe was
+      never armed, since Thread commissioning finishes after it).
+    - The node still uses its own local schedule (test defaults), so it shows its own overdue doses.
+    - Step 3 (next) sync: the C5 is the source of truth; nodes get schedule + taken state over
+      Thread (UDP/CoAP on the mesh, not via Apple). The C5's "N nodes synced" (now a placeholder in
+      `ui_home.c`) becomes real.
+    - Later: mark a dose taken from the node with a tap on the case (QMI8658 tap detection on INT1
+      GPIO5) or BOOT, with a confirm/undo window; battery tile in Home.
 
 - Licensing: Waveshare code is Apache-2.0. Keep headers on copied files and list them in a
   `THIRD_PARTY_LICENSES` file. `esp_xiaozhi` has its own license; don't copy it.
