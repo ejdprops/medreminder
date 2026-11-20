@@ -54,7 +54,9 @@ python tools/serial_capture.py --seconds 60 --reset --out /tmp/boot.log   # read
   it spins redrawing the prompt, starves the CPU and breaks commissioning (tested).
 - First Matter build is ~15-25 min; incremental builds are fast.
 - `serial_capture.py --reset` on the C6 can lose the log after the bootloader (USB re-enumerates);
-  capture again without `--reset`.
+  capture again without `--reset`. Opening the C6's port sometimes restarts it too (and the first
+  ~30 s of log are lost), so start a long capture before asking the user to do something. Every
+  `heap[...]` line (10 s) ends with the last reset's cause (`reset usb`, `power-on`, `panic`...).
 
 ## Firmware versions
 
@@ -80,6 +82,7 @@ firmware/
 ├── main/                 app_main.cpp (Matter node), matter_dev.cpp (bridge: dose accessories), ui.c
 │   │                     (display startup), ui_home.c (RECT home), ui_round.c (ROUND home, node),
 │   │                     ui_settings.c, ui_doses.c (schedule list + editor), ui_sleep.c,
+│   │                     node_sync.c (C5 <-> nodes over Thread), imu_tap.c (node double tap),
 │   │                     mem_caps.h (PSRAM or internal), icons/ (generated A8 images)
 │   ├── icons/svg/        icon sources; regenerate with tools/svg_icons.py (see below)
 │   └── fonts/            generated Inter LVGL fonts (tools/gen_fonts.sh) + OFL license
@@ -167,7 +170,12 @@ ESP32-C6 QFN40 rev 0.2, single core 160MHz, 512KB SRAM, **no PSRAM**, 16MB flash
 - **GPIO23 is the charger status line on this board.** Waveshare's BSP (and even their non-touch
   demo) drives it as touch reset; ours leaves touch out.
 - No speaker/codec: the node alerts by screen only (a buzzer on GPIO1-3 is possible later).
-- Input: no touch; BOOT button and the IMU (tap/shake detection, planned) only.
+- Input: no touch; BOOT button and the QMI8658 IMU (double tap on the case, `main/imu_tap.c`).
+  **The QMI8658's built-in tap engine never reported a tap on this board** (configured per
+  SensorLib's `configTap`, registers read back correctly, STATUS1/TAP_STATUS stayed 0): taps are
+  detected in software from the FIFO (500 Hz, every sample). Lying still, sample-to-sample noise is
+  ~3 mg; a finger tap is a 150-400 mg jump. The first FIFO read after power-up holds junk
+  (-32768s). Picking the node up while on USB restarted it once (no coredump: likely the plug).
 - RAM: idle internal free ~175KB with display + LVGL + Matter (no dose endpoints), 150KB with them.
   Static DIRAM ~210KB.
 - **LVGL (priority 6) outranks the CHIP task (priority 1) on one core:** anything redrawing every
@@ -238,7 +246,8 @@ ESP32-C6 QFN40 rev 0.2, single core 160MHz, 512KB SRAM, **no PSRAM**, 16MB flash
     the old rows hard to hit). Overdue: red 3px border, pulse, "Late N min" badge. After a take, a
     10 s Undo strip (amber button, countdown bar) shares the card's space. Nothing left: gray "All
     done today" card with tomorrow's first dose.
-  - Bottom: node-sync status (faint green/red outline) and version, centered on the screen.
+  - Bottom: node-sync status ("N nodes synced" green, "x of y nodes synced" red, "No nodes" gray;
+    `node_sync_status`) and version, centered on the screen.
   - Taps count only when held >= 100ms (`main/ui_tap.c`, `UI_TAP_MIN_MS`). Layout per board:
     Kconfig `MEDREMINDER_UI_LAYOUT` RECT (C5) or ROUND (node, `main/ui_round.c`, see 7g). Boot splash: Averak Labs logo (cyberpunk recolor) for 5 s
     (`SPLASH_MS` in `main/ui.c`), then a fade to home.
@@ -422,12 +431,36 @@ ESP32-C6 QFN40 rev 0.2, single core 160MHz, 512KB SRAM, **no PSRAM**, 16MB flash
       matter_info.cpp, fed by `app_event_cb`: pairing runs from the PASE session until
       CommissioningComplete or fail-safe expiry; the session's end only counts if the fail-safe was
       never armed, since Thread commissioning finishes after it).
-    - The node still uses its own local schedule (test defaults), so it shows its own overdue doses.
-    - Step 3 (next) sync: the C5 is the source of truth; nodes get schedule + taken state over
-      Thread (UDP/CoAP on the mesh, not via Apple). The C5's "N nodes synced" (now a placeholder in
-      `ui_home.c`) becomes real.
-    - Later: mark a dose taken from the node with a tap on the case (QMI8658 tap detection on INT1
-      GPIO5) or BOOT, with a confirm/undo window; battery tile in Home.
+    - Step 3 (done) sync (`main/node_sync.c`): UDP port 49231 on the Thread mesh (not via Apple),
+      the C5 is the source of truth. The C5 multicasts a BEACON (CRC of its state) to `ff03::4d52`
+      every 30 s and on every change; nodes answer HELLO (the CRC they hold); a node with an old CRC
+      gets a STATE (`doses_snapshot_t`: schedule, taken bits, date, overdue setting), saves it in
+      NVS and acks with HELLO. The same state goes to a node at most every 5 s; a newer one goes
+      at once (an Undo within 5 s of a take used to wait for the next beacon). Synced = heard
+      within 120 s with the current CRC; nodes are forgotten after 10 min. The node shows a "Not
+      synced" badge when the C5 hasn't been heard for 90 s. Tested: take/undo on the C5 reaches the
+      node in ~1 s; unplugging the node turns the C5 red within 2 min.
+      - lwIP + OpenThread: `inet6_aton()` into a `struct in6_addr` writes an lwIP `ip6_addr_t`
+        (4 bytes longer, zone) and zeroed the next field (`ipv6mr_interface`): the multicast join
+        failed with errno 125. Use `ip6addr_aton` + `inet6_addr_from_ip6addr`.
+    - Node colors (wife: the white screen was too bright): the whole screen is the next dose's
+      color (as its pill on the C5), text white/dark by `ui_dose_name_color`; date 16px, clock
+      23px; overdue: red ring blinks, "Late N min" in a white badge; done for the day: dark gray
+      with a green ring. Dots in the text color.
+    - Node screen dims to 25% after the sleep timeout instead of going off (`ASLEEP_PERCENT` in
+      `ui_sleep.c`, NODE role); full brightness while a dose is due. Always-on is fine for the
+      IPS LCD (no burn-in); dimming mainly saves the backlight LEDs.
+    - Double tap to take (`main/imu_tap.c`): two taps 0.5-2 s apart (`DTAP_MIN_MS`/`MAX`); a tap
+      is a jump > 150 mg between consecutive samples whose run of jumps began after 100 ms of calm
+      (`ONSET_MS` 20: the spike's own rise isn't "moving"), then 150 ms dead time. The node shows
+      "Taking...", sends TAKE (uid) to the C5 (retried every 2 s, 5 times, until a new STATE
+      arrives); the C5 takes it like a Home request (`doses.c`), ~1 s round trip. No undo on the
+      node (hold the row on the C5). Each tap is logged (`imu_tap: tap ~225 mg, 1252 ms after
+      the last`) for tuning.
+    - Battery: the board has a LiPo charger (GPIO23 status, GPIO0 divider), but as a Thread router
+      with the radio always on it would last well under a day. Weeks would need a sleepy end
+      device (Matter ICD), the screen mostly off (wake on tap / dose due) and polling sync.
+    - Later: undo from the node; battery tile in Home.
 
 - Licensing: Waveshare code is Apache-2.0. Keep headers on copied files and list them in a
   `THIRD_PARTY_LICENSES` file. `esp_xiaozhi` has its own license; don't copy it.
