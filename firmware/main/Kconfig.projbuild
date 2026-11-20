@@ -17,6 +17,18 @@ menu "MedReminder"
         help
             Local timezone for the clock. Default US Central with DST.
 
+    choice MEDREMINDER_ROLE
+        prompt "Device role"
+        default MEDREMINDER_ROLE_MAIN
+        help
+            Set per board in boards/<board>/sdkconfig.defaults.
+
+        config MEDREMINDER_ROLE_MAIN
+            bool "Main unit: schedule editing, dose accessories in Apple Home"
+        config MEDREMINDER_ROLE_NODE
+            bool "Node: shows the doses; no dose accessories (the main unit has them)"
+    endchoice
+
     choice MEDREMINDER_UI_LAYOUT
         prompt "Home screen center layout"
         default MEDREMINDER_UI_LAYOUT_RECT
@@ -26,7 +38,7 @@ menu "MedReminder"
         config MEDREMINDER_UI_LAYOUT_RECT
             bool "Rectangular: full-width pill column, time on the top line"
         config MEDREMINDER_UI_LAYOUT_ROUND
-            bool "Round: pills in a 168px circle with a TODAY/time header"
+            bool "Round 240x240, no touch: next dose large in a colored ring (ui_round.c)"
     endchoice
 
     config MEDREMINDER_DOSE_TEST

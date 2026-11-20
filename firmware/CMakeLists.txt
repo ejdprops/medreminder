@@ -34,6 +34,8 @@ set(MATTER_SDK_PATH ${ESP_MATTER_PATH}/connectedhomeip/connectedhomeip)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 include(${ESP_MATTER_PATH}/examples/common/cmake_common/components_include.cmake)
 include(${BOARD_DIR}/esp_matter_device.cmake)
+# One component lock per board (different targets and BSP dependencies)
+idf_build_set_property(DEPENDENCIES_LOCK ${BOARD_DIR}/dependencies.lock)
 
 set(EXTRA_COMPONENT_DIRS
     "${ESP_MATTER_PATH}/examples/common"

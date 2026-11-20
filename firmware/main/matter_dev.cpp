@@ -5,6 +5,8 @@
  *     weekly dose): on = taken today. Turning it on
  *     in Home takes the dose, off undoes it. Doses not due today (weekly) stay off; writes to them
  *     are refused (set back to off).
+ * Nodes (CONFIG_MEDREMINDER_ROLE_NODE) keep the empty aggregator and add no endpoints: the main
+ * unit is the one with dose accessories in Home.
  * Each dose's endpoint belongs to the dose's uid, saved here as uid -> endpoint id, so Home rooms
  * and automations survive edits, re-sorting and reboots (endpoints are resumed with their ids).
  * Adding or deleting a dose adds or removes its endpoint while running; renaming updates its
@@ -32,6 +34,7 @@
 #include <data_model_provider/esp_matter_data_model_provider.h>
 
 #include "audio.h"
+#include "mem_caps.h"
 
 using namespace esp_matter;
 using namespace esp_matter::endpoint;
@@ -71,7 +74,7 @@ typedef struct {
     bool on;
 } request_t;
 
-/* Buffers in PSRAM (internal RAM is short): allocated in matter_dev_start */
+/* Buffers in PSRAM if there is any (internal RAM is short): allocated in matter_dev_start */
 typedef struct {
     matter_dose_t pub[DOSE_MAX];  /* published by the UI task (under s_mutex) */
     matter_dose_t sync[DOSE_MAX]; /* this module's task: copy being synced */
@@ -365,19 +368,24 @@ void matter_dev_create(node_t *node)
 
 void matter_dev_start(void)
 {
+#if CONFIG_MEDREMINDER_ROLE_NODE
+    ESP_LOGI(TAG, "node: no dose accessories");
+    return;
+#endif
     if (!s_aggregator) {
         return;
     }
-    s_bufs = (bufs_t *)heap_caps_calloc(1, sizeof(bufs_t), MALLOC_CAP_SPIRAM);
+    s_bufs = (bufs_t *)heap_caps_calloc(1, sizeof(bufs_t), MEM_CAPS_BULK);
     if (!s_bufs) {
         ESP_LOGE(TAG, "no memory");
         return;
     }
     s_mutex = xSemaphoreCreateMutex();
     s_requests = xQueueCreate(8, sizeof(request_t));
-    /* Stack in PSRAM like the UI's: XIP from PSRAM keeps it usable during flash (NVS) writes */
+    /* Stack in PSRAM like the UI's (if there is any): XIP from PSRAM keeps it usable during flash
+     * (NVS) writes */
     if (xTaskCreatePinnedToCoreWithCaps(task, "matter_dev", 6144, NULL, 4, &s_task, tskNO_AFFINITY,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+                                        MEM_CAPS_BULK) != pdPASS) {
         ESP_LOGE(TAG, "task create failed");
     }
 }

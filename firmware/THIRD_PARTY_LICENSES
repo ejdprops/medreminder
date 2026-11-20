@@ -14,6 +14,16 @@ Waveshare ESP32-C5-Touch-LCD-2.8 BSP
     boards/c5_waveshare/components/waveshare__esp_lcd_touch_cst3530/
         Unmodified (test_apps dropped). Apache-2.0; copyright holders in the file headers.
 
+Waveshare ESP32-C6-LCD-1.28 BSP
+  Source:  https://github.com/waveshareteam/ESP32-C6-LCD-1.28,
+           examples/ESP-IDF-v5.5.2/07_LVGL_Demo/components/esp32_c6_touch_lcd_1_28/
+  License: Apache-2.0 (full text: boards/c6_round/components/esp32_c6_lcd_1_28/LICENSE)
+  Files:
+    boards/c6_round/components/esp32_c6_lcd_1_28/
+        Reworked from esp32_c6_touch_lcd_1_28.c/.h (GC9A01 init sequence, pins, backlight PWM):
+        touch, SD card and SPIFFS removed, API matched to the C5 BSP; CMakeLists.txt and
+        idf_component.yml rewritten
+
 Registry components (lvgl, esp_lvgl_adapter, custom_io_expander_ch32v003, esp_codec_dev, ...)
 are fetched by the ESP component manager into managed_components/ and are not copied here.
 

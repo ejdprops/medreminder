@@ -11,6 +11,7 @@ static const char *TAG = "ui";
 #if __has_include("bsp/esp-bsp.h")
 #include "bsp/esp-bsp.h"
 #include "images/images.h"
+#include "mem_caps.h"
 #include "ui_home.h"
 #include "ui_sleep.h"
 #include "ui_theme.h"
@@ -39,13 +40,16 @@ static void show_splash_then(lv_obj_t *home)
 
 static void ui_init_task(void *arg)
 {
-    /* LVGL task stack in PSRAM: internal RAM is reserved for Matter and the SPI DMA buffers */
+    /* LVGL task stack in PSRAM if there is any: internal RAM is reserved for Matter and the SPI
+     * DMA buffers */
     bsp_display_cfg_t cfg = {
         .lv_adapter_cfg = ESP_LV_ADAPTER_DEFAULT_CONFIG(),
-        .rotation = ESP_LV_ADAPTER_ROTATE_90, /* landscape 320x240 */
+        .rotation = BSP_LCD_ROTATION,
         .tear_avoid_mode = ESP_LV_ADAPTER_TEAR_AVOID_MODE_NONE,
     };
+#if CONFIG_SPIRAM
     cfg.lv_adapter_cfg.stack_in_psram = true;
+#endif
     if (!bsp_display_start_with_config(&cfg)) {
         ESP_LOGE(TAG, "display start failed");
     } else {
@@ -72,9 +76,9 @@ static void ui_init_task(void *arg)
 void ui_start(void)
 {
     /* bsp_display_show() renders the first frame on the calling task; main's 3.5KB stack is too
-     * small for that. Do the startup on a one-shot task with its stack in PSRAM. */
+     * small for that. Do the startup on a one-shot task (stack in PSRAM if there is any). */
     if (xTaskCreatePinnedToCoreWithCaps(ui_init_task, "ui_init", 8192, NULL, 5, NULL, tskNO_AFFINITY,
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+                                        MEM_CAPS_BULK) != pdPASS) {
         ESP_LOGE(TAG, "ui_init task create failed");
     }
 }

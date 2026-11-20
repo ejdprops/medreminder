@@ -10,6 +10,8 @@
 #define BSP_LCD_COLOR_SPACE LCD_RGB_ELEMENT_ORDER_RGB
 #define BSP_LCD_H_RES 240 /* Portrait width, pixels */
 #define BSP_LCD_V_RES 320 /* Portrait height, pixels */
+/* medreminder: landscape 320x240, USB port on the right */
+#define BSP_LCD_ROTATION ESP_LV_ADAPTER_ROTATE_90
 #define BSP_LCD_PIXEL_CLOCK_HZ (80 * 1000 * 1000) /* SPI clock, Hz */
 #ifdef __cplusplus
 extern "C" {

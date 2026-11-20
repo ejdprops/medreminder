@@ -20,6 +20,7 @@
 
 #include <app_priv.h>
 #include <matter_dev.h>
+#include <matter_info.h>
 #include <ui.h>
 #include <fw_version.h>
 #include <time_sync.h>
@@ -78,6 +79,7 @@ static const uint16_t s_decryption_key_len = decryption_key_end - decryption_key
 
 static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
 {
+    matter_info_on_event(event); /* pairing progress for the UI */
     switch (event->Type) {
     case chip::DeviceLayer::DeviceEventType::kInterfaceIpAddressChanged:
         ESP_LOGI(TAG, "Interface IP Address changed");

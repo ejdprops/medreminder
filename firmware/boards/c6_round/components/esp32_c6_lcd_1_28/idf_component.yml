@@ -1,0 +1,13 @@
+dependencies:
+  espressif/esp_lcd_gc9a01: ^2.0.4
+  espressif/esp_lvgl_adapter:
+    public: true
+    version: "0.4.3~1"
+  idf: '>=5.5.4,<6.0'
+  lvgl/lvgl: '9.5.0'
+
+description: Board Support Package (BSP) for Waveshare ESP32-C6-LCD-1.28 (medreminder trim, no touch)
+targets:
+- esp32c6
+url: https://www.waveshare.com/esp32-c6-lcd-1.28.htm
+version: 1.0.0

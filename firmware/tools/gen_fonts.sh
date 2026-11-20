@@ -24,6 +24,8 @@ FONTS=(
     "16 SemiBold inter_16_semibold"
     "16 Bold inter_16_bold"
     "23 SemiBold inter_23_semibold"
+    "30 SemiBold inter_30_semibold"
+    "48 Bold inter_48_bold"
 )
 
 decls=""

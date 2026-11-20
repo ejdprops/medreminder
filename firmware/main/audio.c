@@ -5,6 +5,10 @@
 static const char *TAG = "audio";
 
 #if __has_include("bsp/esp-bsp.h")
+#include "bsp/esp-bsp.h"
+#endif
+
+#if BSP_CAPS_AUDIO
 #include <math.h>
 #include <string.h>
 
@@ -13,8 +17,6 @@ static const char *TAG = "audio";
 #include <freertos/queue.h>
 #include <esp_heap_caps.h>
 #include <nvs.h>
-
-#include "bsp/esp-bsp.h"
 
 #define SAMPLE_RATE 16000
 #define AMP_SETTLE_MS 150    /* amp start-up: sound sent sooner than this is lost */

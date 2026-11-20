@@ -14,6 +14,11 @@ bool matter_get_manual_code(char *buf, size_t len); /* 11 digits, no dashes */
 /* Number of commissioned fabrics; fills up to max vendor IDs (0x1349 Apple Home, 0x1384 Apple Keychain). */
 int matter_fabric_vendors(uint16_t *vendor_ids, int max);
 
+/* Pairing progress, from Matter's events (app_main): a commissioner (Home) is setting the device up;
+ * and how many times commissioning has completed since boot (changes when one finishes). No lock. */
+bool matter_pairing_active(void);
+unsigned matter_pairing_completions(void);
+
 /* Basic Information as Apple Home shows it (Manufacturer = vendor_name, Model = product_name) */
 typedef struct {
     char vendor_name[33];
@@ -25,4 +30,8 @@ bool matter_get_device_info(matter_device_info_t *info);
 
 #ifdef __cplusplus
 }
+
+#include <platform/CHIPDeviceEvent.h>
+/* app_main's Matter event callback passes every event here */
+void matter_info_on_event(const chip::DeviceLayer::ChipDeviceEvent *event);
 #endif

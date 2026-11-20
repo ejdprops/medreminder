@@ -14,4 +14,6 @@ LV_FONT_DECLARE(inter_14_semibold);
 LV_FONT_DECLARE(inter_16_semibold);
 LV_FONT_DECLARE(inter_16_bold);
 LV_FONT_DECLARE(inter_23_semibold);
+LV_FONT_DECLARE(inter_30_semibold);
+LV_FONT_DECLARE(inter_48_bold);
 

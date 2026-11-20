@@ -1,0 +1,19 @@
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/c6_round/partitions.csv"
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+# No PSRAM on the C6: the Matter data model stays in internal RAM
+CONFIG_ESP_MATTER_MEM_ALLOC_MODE_INTERNAL=y
+# LVGL (display BSP): FreeRTOS integration, malloc from the system heap
+CONFIG_LV_OS_FREERTOS=y
+CONFIG_LV_USE_CLIB_MALLOC=y
+CONFIG_LV_USE_CLIB_STRING=y
+CONFIG_LV_USE_CLIB_SPRINTF=y
+CONFIG_LV_USE_QRCODE=y
+# Node: shows the doses, no dose accessories in Home
+CONFIG_MEDREMINDER_ROLE_NODE=y
+# Home screen: round 240x240 layout
+CONFIG_MEDREMINDER_UI_LAYOUT_ROUND=y
+
+# Matter Basic Information names (Manufacturer/Model in Apple Home), path relative to firmware/
+CONFIG_CHIP_PROJECT_CONFIG="boards/c6_round/CHIPProjectConfig.h"
