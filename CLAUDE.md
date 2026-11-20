@@ -8,6 +8,9 @@ Firmware runs on two dev boards, both Matter-over-Thread:
   sound, dose accessories in Apple Home.
 - **Node:** Waveshare ESP32-C6-LCD-1.28 (`boards/c6_round`; the user's board is a kctozo clone with
   that silkscreen): round 240x240, **no touch**, shows the doses (see 7g). More nodes may follow.
+- **Dashboard node:** Seeed XIAO ESP32-C6 (`boards/xiao_c6_dash`), no display: a node that feeds a
+  CrowPanel 7" ESP32-S3 dashboard over one wire (see 7h). The S3 dashboard is a separate IDF
+  project (not in this repo, no Matter).
 
 ## How the user works
 
@@ -83,6 +86,7 @@ firmware/
 │   │                     (display startup), ui_home.c (RECT home), ui_round.c (ROUND home, node),
 │   │                     ui_settings.c, ui_doses.c (schedule list + editor), ui_sleep.c,
 │   │                     node_sync.c (C5 <-> nodes over Thread), imu_tap.c (node double tap),
+│   │                     uart_link.c (dashboard node <-> CrowPanel, one wire),
 │   │                     mem_caps.h (PSRAM or internal), icons/ (generated A8 images)
 │   ├── icons/svg/        icon sources; regenerate with tools/svg_icons.py (see below)
 │   └── fonts/            generated Inter LVGL fonts (tools/gen_fonts.sh) + OFL license
@@ -98,10 +102,12 @@ firmware/
 │       ├── device/                       pin map for esp-matter's LED/button HAL
 │       ├── esp32_c5_touch_lcd_2_8/       Waveshare BSP (trimmed; panel/touch rotation added)
 │       └── waveshare__esp_lcd_touch_cst3530/
-└── boards/c6_round/               same files; 16MB flash, no PSRAM, ROLE_NODE + LAYOUT_ROUND
-    └── components/
-        ├── device/                       BOOT GPIO9, no LED
-        └── esp32_c6_lcd_1_28/            BSP rewritten from Waveshare's: display, backlight, I2C only
+├── boards/c6_round/               same files; 16MB flash, no PSRAM, ROLE_NODE + LAYOUT_ROUND
+│   └── components/
+│       ├── device/                       BOOT GPIO9, no LED
+│       └── esp32_c6_lcd_1_28/            BSP rewritten from Waveshare's: display, backlight, I2C only
+└── boards/xiao_c6_dash/           4MB flash (no storage partition), ROLE_NODE, no BSP (headless),
+    └── components/device/            UART_LINK_GPIO 2; BOOT GPIO9, LED unused
 ```
 
 - UI startup: `ui_start()` (after `esp_matter::start`) spawns a one-shot `ui_init` task with an 8KB
@@ -111,6 +117,9 @@ firmware/
 - Per board, from the BSP header: `BSP_LCD_ROTATION` (C5 `ROTATE_90`, C6 `ROTATE_0`) and
   `BSP_CAPS_AUDIO` (audio.c builds only with it). Task stacks and big buffers use `MEM_CAPS_BULK`
   (`main/mem_caps.h`): PSRAM if the board has it, else internal.
+- Boards without a display BSP (no `bsp/esp-bsp.h`, so no LVGL; every UI file is guarded with
+  `__has_include("lvgl.h")`): `ui_start()` instead starts a `doses` task that calls `doses_init()`
+  and `doses_tick()` every second (node sync, Home requests, midnight).
 - Kconfig `MEDREMINDER_ROLE`: MAIN (C5) or NODE (C6: `matter_dev` keeps the empty aggregator and
   adds no dose endpoints, so Home doesn't get duplicates).
 - C5 landscape: `ROTATE_90` with the USB port on the right. The LVGL adapter does not rotate SPI
@@ -181,6 +190,31 @@ ESP32-C6 QFN40 rev 0.2, single core 160MHz, 512KB SRAM, **no PSRAM**, 16MB flash
 - **LVGL (priority 6) outranks the CHIP task (priority 1) on one core:** anything redrawing every
   frame starves Matter (task watchdog on `lvgl`/`swdraw`; pairing timed out). The overdue ring
   blinks on a 700ms timer instead of fading; the pairing screens are static.
+
+## Seeed XIAO ESP32-C6 facts (dashboard node)
+
+ESP32-C6FH4 (QFN32) rev 0.1, **4MB flash in package**, no PSRAM. On USB it shows up as
+`/dev/cu.usbmodem1101` like the others. Pins (USB-C up, parts facing you): left column D0-D6, right
+column 5V, GND, 3V3, D10-D7. D2 = GPIO2 (no strapping or console role) carries the link. D6/D7 are
+UART0 (console), GPIO8/9/15 strapping, GPIO9 BOOT, GPIO15 user LED (active low, unused),
+GPIO3/GPIO14 RF switch (left alone: onboard ceramic antenna).
+- App 1.69MB in 1.9MB OTA slots (14% free). Internal RAM free ~221KB idle, min 215KB while pairing.
+- Paired as "Pill Reminder Dash" with the manual code (no screen) on the first try (2026-11-20).
+
+## CrowPanel 7" facts (dashboard panel)
+
+Elecrow DIS08070H, board rev V3.0, ESP32-S3-WROOM-1-N4R8 (**4MB flash, 8MB PSRAM**), CH340-type
+USB serial on `/dev/cu.usbserial-110`. **Only 115200 baud is reliable** (921600/460800 garbled
+reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpanel7_factory.bin`
+(4MB, verified; restore with `write_flash 0x0`).
+- Needs the Xtensa compiler (`idf_tools.py install xtensa-esp-elf`, installed). `export.sh` does
+  not put it on PATH yet: prepend
+  `~/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20260121/xtensa-esp-elf/bin` (or register the
+  esp32s3 target with the IDF tools before the dashboard work). Use `getidf`, not `getmatter`.
+- GPIO_D Grove port: **yellow = IO38, red = 3V3, black = GND, white = NC** (measured). Grove
+  UART0 is not used: it shares UART0 with the USB serial chip.
+- Pin test / link tester: `~/esp/crowpanel_pintest` (outside this repo; `HANDOFF.md` there). Phase 3
+  polls the XIAO and logs replies; BOOT (GPIO0) sends TAKE for the next pending dose.
 
 ## Matter / Apple Home status
 
@@ -461,6 +495,27 @@ ESP32-C6 QFN40 rev 0.2, single core 160MHz, 512KB SRAM, **no PSRAM**, 16MB flash
       with the radio always on it would last well under a day. Weeks would need a sleepy end
       device (Matter ICD), the screen mostly off (wake on tap / dose due) and polling sync.
     - Later: undo from the node; battery tile in Home.
+
+  - **7h** (in progress, branch `c6-node`) dashboard: CrowPanel 7" ESP32-S3 fed by a XIAO C6 node.
+    - Step 1 (done) `boards/xiao_c6_dash`: headless node, pairs, syncs from the C5 ("2 nodes
+      synced").
+    - Step 2 (done) single-wire link (`main/uart_link.c`, Kconfig `MEDREMINDER_UART_LINK_GPIO`,
+      -1 = none): GPIO2 on the XIAO <-> IO38 on the panel, 115200 8N1, both pads open-drain with
+      pull-up and UART TX+RX routed onto the one pad (each side hears and drops its own bytes).
+      The panel polls every 200 ms, the node only answers. Frame: 0xA5, type, length u16 LE,
+      payload, CRC32 LE (`esp_rom_crc32_le` over type+length+payload). POLL (u32 CRC the panel
+      holds), TAKE (CRC + u8 uid, sent on via `node_sync_request_take`), REPLY (time UTC (0 =
+      not set), flags bit0 = C5 connected, CRC; plus the `doses_snapshot_t` when the panel's CRC
+      differs). Tested: 326/326 polls OK; BOOT on the panel took Karen 1330 on the C5, new state
+      back on the panel in ~2.2 s.
+    - Wiring while developing: **only yellow (IO38 <-> D2) and black (GND)**, each board on its own
+      USB. Red (3V3) only when the XIAO runs from the panel alone (two regulators would otherwise
+      share the rail, and an unpowered panel would load the XIAO's regulator); add 100 uF at the
+      XIAO then.
+    - Not done (handoff idea): mirror On/Off endpoints on the XIAO. Skipped: the C5 already has a
+      tile per dose in Home.
+    - Next: the S3 dashboard (separate IDF project, LVGL on the 800x480 RGB panel), sharing the
+      frame/snapshot layouts with `uart_link.c` / `doses.h`.
 
 - Licensing: Waveshare code is Apache-2.0. Keep headers on copied files and list them in a
   `THIRD_PARTY_LICENSES` file. `esp_xiaozhi` has its own license; don't copy it.
