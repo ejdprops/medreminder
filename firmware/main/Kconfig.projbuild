@@ -49,6 +49,13 @@ menu "MedReminder"
             due immediately, then one every 2 minutes; overdue after 1 minute, alert repeat every
             minute. Reboot to restart it. For testing overdue alerts without waiting hours.
 
+    config MEDREMINDER_UART_LINK_GPIO
+        int "Single-wire UART link to a dashboard panel: GPIO (-1 = none)"
+        default -1
+        help
+            Nodes wired to a dashboard panel (uart_link.c). Set per board in
+            boards/<board>/sdkconfig.defaults.
+
     config MEDREMINDER_NTP_SERVER
         string "NTP server"
         default "pool.ntp.org"

@@ -1,0 +1,13 @@
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="boards/xiao_c6_dash/partitions.csv"
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+# No PSRAM on the C6: the Matter data model stays in internal RAM
+CONFIG_ESP_MATTER_MEM_ALLOC_MODE_INTERNAL=y
+# Node with no display: mirrors the main unit's doses for the dashboard panel it is wired to
+CONFIG_MEDREMINDER_ROLE_NODE=y
+
+# Matter Basic Information names (Manufacturer/Model in Apple Home), path relative to firmware/
+CONFIG_CHIP_PROJECT_CONFIG="boards/xiao_c6_dash/CHIPProjectConfig.h"
+# Single-wire UART link to the CrowPanel (GPIO_D yellow wire) on D2
+CONFIG_MEDREMINDER_UART_LINK_GPIO=2

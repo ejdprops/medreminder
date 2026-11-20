@@ -87,9 +87,30 @@ void ui_start(void)
 
 #else
 
+#include <time.h>
+
+#include "doses.h"
+#include "mem_caps.h"
+
+/* No display: still run the doses once a second (node sync, Home requests, midnight); the UI
+ * task does this on boards with a screen. doses_* belong to this task from here on. */
+static void doses_task(void *arg)
+{
+    (void)arg;
+    doses_init();
+    while (true) {
+        doses_tick(time(NULL));
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
 void ui_start(void)
 {
     ESP_LOGI(TAG, "no display on this board");
+    if (xTaskCreatePinnedToCoreWithCaps(doses_task, "doses", 4096, NULL, 3, NULL, tskNO_AFFINITY,
+                                        MEM_CAPS_BULK) != pdPASS) {
+        ESP_LOGE(TAG, "doses task create failed");
+    }
 }
 
 #endif

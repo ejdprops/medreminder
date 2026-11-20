@@ -17,6 +17,7 @@
 #include "matter_dev.h"
 #include "node_sync.h"
 #include "time_sync.h"
+#include "uart_link.h"
 
 static const char *TAG = "doses";
 
@@ -634,12 +635,14 @@ static void apply_sync(void)
 #endif
 }
 
-/* What this device holds, for node sync (the main unit sends it; a node reports it back) */
+/* What this device holds, for node sync (the main unit sends it; a node reports it back) and a
+ * dashboard panel on the UART link */
 static void publish_sync(void)
 {
     static doses_snapshot_t snap;
     doses_get_snapshot(&snap);
     node_sync_publish(&snap);
+    uart_link_publish(&snap);
 }
 
 bool doses_tick(time_t now)

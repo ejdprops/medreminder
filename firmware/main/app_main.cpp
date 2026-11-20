@@ -26,6 +26,7 @@
 #include <ui.h>
 #include <fw_version.h>
 #include <time_sync.h>
+#include <uart_link.h>
 #include <app_reset.h>
 #if CHIP_DEVICE_CONFIG_ENABLE_THREAD
 #include <platform/ESP32/OpenthreadLauncher.h>
@@ -249,6 +250,7 @@ extern "C" void app_main()
 
     matter_dev_start();
     node_sync_start();
+    uart_link_start();
 
     time_sync_start();
     ui_start();
