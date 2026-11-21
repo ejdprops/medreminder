@@ -514,8 +514,26 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       XIAO then.
     - Not done (handoff idea): mirror On/Off endpoints on the XIAO. Skipped: the C5 already has a
       tile per dose in Home.
-    - Next: the S3 dashboard (separate IDF project, LVGL on the 800x480 RGB panel), sharing the
-      frame/snapshot layouts with `uart_link.c` / `doses.h`.
+    - Step 3 (done) dashboard bring-up: `dashboard/` (separate IDF project, no Matter; `getidf`,
+      then `./build.sh`, `./build.sh -p /dev/cu.usbserial-110 -b 115200 flash`; the script puts the
+      Xtensa compiler on PATH). `board.c`: RGB panel (pins/timing from the V3.0 schematic and
+      Elecrow's factory code, 15 MHz pclk, 3 PSRAM frame buffers + internal bounce buffer; flicker
+      not yet checked), GT911 (reset via PCA9557 0x18 IO0 with IO1/INT low -> 0x5D; polled, no
+      rotation/mirroring needed), backlight LEDC on GPIO2; LVGL via esp_lvgl_adapter. `link.c`:
+      the panel side of the link. `doses.h` and `firmware/main/uart_link_proto.h` (frame layout)
+      are shared through the include path. PCLK is GPIO0: BOOT is unusable once the display runs.
+      - IO38 also reaches the GT911 INT net through R57 ("10K/NC"; schematic note: IO38 is free
+        with the resistive touch option). On this unit touching during polling caused 0 link
+        failures, so R57 is not fitted (Elecrow's own V3.0 code drives IO38 as plain GPIO_D too).
+      - The XIAO can run from the Grove red wire (3V3) with no USB of its own; never both at
+        once. Then it restarts with the panel (and with every panel serial-port open).
+    - Planned tiles (no Home Assistant): weather (Open-Meteo) and Cozi (calendar .ics feed) over
+      the S3's Wi-Fi; garage and package box (Meross MSH300HK hub, in Apple Home) as mirror On/Off
+      switches on the XIAO kept in step by Home automations, sent over the link. Skipped: lock,
+      temperature/humidity (HomePod readings aren't reachable outside Home; the Resideo T9/T10
+      has a cloud API if wanted later). Secrets (Wi-Fi, Cozi URL) in a gitignored
+      `dashboard/secrets.h`, never in git or chat.
+    - Next: step 4, the dose screen (C5 layout, larger, dark theme) with a column for the tiles.
 
 - Licensing: Waveshare code is Apache-2.0. Keep headers on copied files and list them in a
   `THIRD_PARTY_LICENSES` file. `esp_xiaozhi` has its own license; don't copy it.
