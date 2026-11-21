@@ -25,3 +25,7 @@ firmware/*.log
 firmware/log.*.txt
 *-backups/
 fp-info-cache
+dashboard/build/
+dashboard/managed_components/
+dashboard/sdkconfig
+dashboard/sdkconfig.old
