@@ -215,6 +215,11 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
   esp32s3 target with the IDF tools before the dashboard work). Use `getidf`, not `getmatter`.
 - GPIO_D Grove port: **yellow = IO38, red = 3V3, black = GND, white = NC** (measured). Grove
   UART0 is not used: it shares UART0 with the USB serial chip.
+- Speaker (from the V3.0 schematic, Eagle file in Elecrow-RD/CrowPanel-7.0-HMI-ESP32-Display-800x480):
+  **NS4168** I2S class-D amp, **BCLK IO42, LRCLK IO18, DATA IO17** (all free), CTRL pulled to 3V3
+  (always on, no enable pin), powered from **3V3** (the 5V option R50 is not fitted: ~0.5-1 W).
+  Output via 10 uF series caps + 1 nF to GND (weak lows: tones of 1-4 kHz carry best) to **J5, JST
+  PH 2.0 2-pin**. Speaker bought: 3 W 8 ohm with a PH 2.0 plug (not yet fitted or coded).
 - Pin test / link tester: `~/esp/crowpanel_pintest` (outside this repo; `HANDOFF.md` there). Phase 3
   polls the XIAO and logs replies; BOOT (GPIO0) sends TAKE for the next pending dose.
 
@@ -537,17 +542,19 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
         failures, so R57 is not fitted (Elecrow's own V3.0 code drives IO38 as plain GPIO_D too).
       - The XIAO can run from the Grove red wire (3V3) with no USB of its own; never both at
         once. Then it restarts with the panel (and with every panel serial-port open).
-    - Planned tiles (no Home Assistant): weather (Open-Meteo) and Cozi (calendar .ics feed) over
-      the S3's Wi-Fi; garage and package box (Meross MSH300HK hub, in Apple Home) as mirror On/Off
-      switches on the XIAO kept in step by Home automations, sent over the link. Skipped: lock,
+    - Tiles (no Home Assistant): weather (Open-Meteo) and Cozi (calendar .ics feed) over the S3's
+      Wi-Fi, a timer. Dropped: garage/package tiles (replaced by the timer), lock,
       temperature/humidity (HomePod readings aren't reachable outside Home; the Resideo T9/T10
-      has a cloud API if wanted later). Secrets (Wi-Fi, Cozi URL) in a gitignored
-      `dashboard/secrets.h`, never in git or chat.
+      has a cloud API if wanted later). Possible later: panel buttons as mirror On/Off switches on
+      the XIAO (auto-off after ~2 s) that trigger Home automations (e.g. HomePod "Pause Audio").
+      Secrets (Wi-Fi, location, Cozi URL) in a gitignored `dashboard/secrets.h` (template
+      `dashboard/secrets.h.example`; the user fills it in), never in git or chat. Don't print it or
+      log the SSID (the Wi-Fi driver logs it at INFO: `wifi.c` sets the `wifi` tag to WARN).
     - Step 4 (done) dose screen (`dashboard/main/ui.c`, dark): banner date · time (30px), today's
       doses as pills on the left (7 rows max, 23px; more: the window starts one row above the
       next dose), the next dose as a big card in the middle (48px time, 30px name, "Late N min"
       badge, red pulsing border when overdue; tap = TAKE, "Taking..." until the new state or
-      10 s), tile column on the right (weather, calendar, garage, package: placeholders). A
+      10 s), tiles on the right (layout since changed, see step 7). A
       status line only when the node doesn't answer or the C5 isn't connected. States are
       computed from the snapshot as `doses.c` does (taken bits only for the snapshot's date).
       The S3's clock is set from the node's REPLY time. Fonts: the firmware's Inter fonts;
@@ -561,7 +568,26 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       `firmware/tools/png_image.py --height 380`) for 5 s, then a fade to the dose screen. A
       "Schedule" button (top right) opens every dose in two columns of 8 (time, name, "Daily" or
       weekdays) and the overdue setting, view only; Back, or 60 s untouched, returns.
-    - Next: Wi-Fi + weather, Cozi, garage/package switches. Schedule ownership stays on
+    - Step 7 (done) Wi-Fi, weather, three-column layout, timer:
+      - Layout: three equal columns (`COL_W`). Left: the dose list (5 rows, 16px) over the
+        next-dose card (30px time, 23px name), the same height. Middle: calendar (deep teal
+        #134e4a, placeholder). Right: weather (dark sky blue #075985) level with the list, timer
+        (deep purple #4c1d95) level with the card. Colors chosen by the user; no red/orange
+        (overdue) on tiles.
+      - `wifi.c`: station from `secrets.h` (credentials kept in RAM only), reconnect with backoff;
+        without `secrets.h` it builds with Wi-Fi off. Wi-Fi/lwIP and mbedTLS allocate in PSRAM.
+        Custom `partitions.csv`: one 3 MB factory app (Wi-Fi + TLS made it 1.4 MB).
+      - `weather.c`: Open-Meteo over HTTPS (cert bundle) every 15 min (60 s retry, 2 s while Wi-Fi
+        is down): temp (F), humidity, WMO code, today's high/low, max rain chance. Tile: icon +
+        "61 F" (the fonts have no degree sign), condition, "H 69 · L 52 · Rain 3%", "as of HHMM"
+        when over an hour old. Icons: own 24x24 stroke SVGs in `dashboard/main/icons/svg`
+        rendered at 48px with `firmware/tools/svg_icons.py` (sun, partly, cloud, fog, rain, snow,
+        storm; recolored per condition).
+      - Timer tile: roller 5-60 min in 5 min steps (pinned left), time left centered, Start /
+        Pause / Reset. When it runs out, a full-screen "Timer done" (pulsing red border) over any
+        screen; a tap closes it and resets. Runs on lv_tick, 200 ms refresh.
+    - Next: speaker (audio.c like the C5's: timer chime, overdue chime on the dashboard and
+      whether the C5 should keep chiming too, volume), Cozi. Schedule ownership stays on
       the C5 (moving it would move the Home dose tiles to the XIAO and put the critical job on
       the most complex device); editing from the dashboard (requests the C5 validates) only if
       wanted later.
