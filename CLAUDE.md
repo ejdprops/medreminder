@@ -571,7 +571,7 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
     - Step 7 (done) Wi-Fi, weather, three-column layout, timer:
       - Layout: three equal columns (`COL_W`). Left: the dose list (5 rows, 16px) over the
         next-dose card (30px time, 23px name), the same height. Middle: calendar (deep teal
-        #134e4a, placeholder). Right: weather (dark sky blue #075985) level with the list, timer
+        #134e4a, step 8). Right: weather (dark sky blue #075985) level with the list, timer
         (deep purple #4c1d95) level with the card. Colors chosen by the user; no red/orange
         (overdue) on tiles.
       - `wifi.c`: station from `secrets.h` (credentials kept in RAM only), reconnect with backoff;
@@ -586,8 +586,25 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       - Timer tile: roller 5-60 min in 5 min steps (pinned left), time left centered, Start /
         Pause / Reset. When it runs out, a full-screen "Timer done" (pulsing red border) over any
         screen; a tap closes it and resets. Runs on lv_tick, 200 ms refresh.
+    - Step 8 (done) Cozi calendar (`dashboard/main/calendar.c`): the household's Cozi iCalendar
+      feed (`DASH_COZI_URL`, rest.cozi.com; **needs a User-Agent**, 403 without) fetched whole
+      into PSRAM (~120 KB, 449 events) every 15 min and at midnight, expanded into the next 14
+      days (max 64 occurrences). Feed facts (checked 2026-11, structure only, titles never
+      printed): timed events `TZID=America/Chicago` (= the panel TZ, taken as local), all-day as
+      dates (DTEND exclusive); RRULE only FREQ YEARLY/WEEKLY/MONTHLY with INTERVAL, UNTIL (UTC),
+      BYDAY (weekdays or "2SU"/"-1FR"), BYMONTHDAY, BYMONTH; EXDATE one per line; no COUNT or
+      RECURRENCE-ID; titles escaped and partly non-ASCII (folded to ASCII for the fonts). The
+      expansion was checked on the Mac against python-dateutil for three windows (incl. a DST
+      change): identical. **Every title starts with "Evan:", "Karen:" or "All:"**: stripped and
+      shown as an initial badge (E red #dc2626, K royal blue #1f45e6 = dose palette 0, A purple
+      #9333ea; gray for any other prefix). Tile: a band per day (TODAY brighter, then TOMORROW,
+      then "MON 23 NOV"), events as chips (filled = timed with HHMM, outlined = all day or a
+      timed event continuing from an earlier day), as many as fit (~10 rows); today's timed
+      events drop off when over. To inspect the feed, print counts/shapes only (it's private).
+    - The panel logs each dose's time and palette index when a new dose state arrives
+      (`link:   1900 color 0`), for matching colors.
     - Next: speaker (audio.c like the C5's: timer chime, overdue chime on the dashboard and
-      whether the C5 should keep chiming too, volume), Cozi. Schedule ownership stays on
+      whether the C5 should keep chiming too, volume). Schedule ownership stays on
       the C5 (moving it would move the Home dose tiles to the XIAO and put the critical job on
       the most complex device); editing from the dashboard (requests the C5 validates) only if
       wanted later.
