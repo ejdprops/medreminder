@@ -85,7 +85,8 @@ firmware/
 ├── main/                 app_main.cpp (Matter node), matter_dev.cpp (bridge: dose accessories), ui.c
 │   │                     (display startup), ui_home.c (RECT home), ui_round.c (ROUND home, node),
 │   │                     ui_settings.c, ui_doses.c (schedule list + editor), ui_sleep.c,
-│   │                     node_sync.c (C5 <-> nodes over Thread), imu_tap.c (node double tap),
+│   │                     node_sync.c (C5 <-> nodes over Thread), imu_shake.c (shake the node),
+│   │                     dose_colors.c (palette, also built by dashboard/),
 │   │                     uart_link.c (dashboard node <-> CrowPanel, one wire),
 │   │                     mem_caps.h (PSRAM or internal), icons/ (generated A8 images)
 │   ├── icons/svg/        icon sources; regenerate with tools/svg_icons.py (see below)
@@ -179,7 +180,8 @@ ESP32-C6 QFN40 rev 0.2, single core 160MHz, 512KB SRAM, **no PSRAM**, 16MB flash
 - **GPIO23 is the charger status line on this board.** Waveshare's BSP (and even their non-touch
   demo) drives it as touch reset; ours leaves touch out.
 - No speaker/codec: the node alerts by screen only (a buzzer on GPIO1-3 is possible later).
-- Input: no touch; BOOT button and the QMI8658 IMU (double tap on the case, `main/imu_tap.c`).
+- Input: no touch; BOOT button and the QMI8658 IMU (shake to take, `main/imu_shake.c`; was a
+  double tap until 2026-11-20).
   **The QMI8658's built-in tap engine never reported a tap on this board** (configured per
   SensorLib's `configTap`, registers read back correctly, STATUS1/TAP_STATUS stayed 0): taps are
   detected in software from the FIFO (500 Hz, every sample). Lying still, sample-to-sample noise is
@@ -381,7 +383,8 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       - One-line LVGL text areas jitter if the box is even 1px shorter than border + padding +
         font line height (it scrolls as the cursor blinks).
     - 7c.5 (done, v0.6.0) dose colors, weekly doses, themes, 24 h:
-      - Per-dose color (`dose_colors`, index saved per dose, append only; the picker offers
+      - Per-dose color (`dose_colors`, in `main/dose_colors.c` (shared with the dashboard), index
+        saved per dose, append only; the picker offers
         `dose_color_order`, see 7f for the current set). Rows are solid (an opacity option was tried and removed; `opacity` stays in the
         struct for the saved layout).
       - Weekly doses: `days` bitmask (Daily or one weekday roller); only shown/alerted on their
@@ -484,13 +487,20 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
     - Node screen dims to 25% after the sleep timeout instead of going off (`ASLEEP_PERCENT` in
       `ui_sleep.c`, NODE role); full brightness while a dose is due. Always-on is fine for the
       IPS LCD (no burn-in); dimming mainly saves the backlight LEDs.
-    - Double tap to take (`main/imu_tap.c`): two taps 0.5-2 s apart (`DTAP_MIN_MS`/`MAX`); a tap
-      is a jump > 150 mg between consecutive samples whose run of jumps began after 100 ms of calm
-      (`ONSET_MS` 20: the spike's own rise isn't "moving"), then 150 ms dead time. The node shows
-      "Taking...", sends TAKE (uid) to the C5 (retried every 2 s, 5 times, until a new STATE
-      arrives); the C5 takes it like a Home request (`doses.c`), ~1 s round trip. No undo on the
-      node (hold the row on the C5). Each tap is logged (`imu_tap: tap ~225 mg, 1252 ms after
-      the last`) for tuning.
+    - Shake to take (`main/imu_shake.c`, replaced the double tap at the wife's request; the tap
+      version is in git history before 2026-11-20): gravity is a ~0.5 s average of the samples, a
+      swing is the rest going over 600 mg (`SHAKE_MG`, re-armed under half, >= 60 ms apart);
+      **4 swings within 1.0 s** (`SHAKE_SWINGS`/`SHAKE_WINDOW_MS`) are a shake, then 2 s cooldown.
+      Tuned on the real node: shakes put 4-5 swings in 0.4-0.7 s; picking up, carrying, a bump on
+      the table make 1-3, spread over ~1 s (5 in 1.5 s missed a gentle shake). Each swing is
+      logged (`imu_shake: swing 2 of 4`). The node shows "Taking...", sends TAKE (uid) to the C5
+      (retried every 2 s, 5 times, until a new STATE arrives); the C5 takes it like a Home request
+      (`doses.c`), ~2 s round trip. No undo on the node (C5 or dashboard). Logging over USB
+      while moving the node gets cut off (the host re-enumerates, the node restarts): test
+      handling on a charger and watch for "Taking..." instead.
+    - TAKE carries an undo flag (`TAKE_UNDO` 0x100 in the CRC field, uid in bits 0-7;
+      `node_sync_request_take(uid, take)` / `node_sync_next_take(&uid, &take)`): used by the
+      dashboard. An older C5 would read an undo as a take: flash the C5 first.
     - Battery: the board has a LiPo charger (GPIO23 status, GPIO0 divider), but as a Thread router
       with the radio always on it would last well under a day. Weeks would need a sleepy end
       device (Matter ICD), the screen mostly off (wake on tap / dose due) and polling sync.
@@ -517,8 +527,8 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
     - Step 3 (done) dashboard bring-up: `dashboard/` (separate IDF project, no Matter; `getidf`,
       then `./build.sh`, `./build.sh -p /dev/cu.usbserial-110 -b 115200 flash`; the script puts the
       Xtensa compiler on PATH). `board.c`: RGB panel (pins/timing from the V3.0 schematic and
-      Elecrow's factory code, 15 MHz pclk, 3 PSRAM frame buffers + internal bounce buffer; flicker
-      not yet checked), GT911 (reset via PCA9557 0x18 IO0 with IO1/INT low -> 0x5D; polled, no
+      Elecrow's factory code, 15 MHz pclk, 3 PSRAM frame buffers + internal bounce buffer; steady,
+      no flicker), GT911 (reset via PCA9557 0x18 IO0 with IO1/INT low -> 0x5D; polled, no
       rotation/mirroring needed), backlight LEDC on GPIO2; LVGL via esp_lvgl_adapter. `link.c`:
       the panel side of the link. `doses.h` and `firmware/main/uart_link_proto.h` (frame layout)
       are shared through the include path. PCLK is GPIO0: BOOT is unusable once the display runs.
@@ -533,7 +543,24 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       temperature/humidity (HomePod readings aren't reachable outside Home; the Resideo T9/T10
       has a cloud API if wanted later). Secrets (Wi-Fi, Cozi URL) in a gitignored
       `dashboard/secrets.h`, never in git or chat.
-    - Next: step 4, the dose screen (C5 layout, larger, dark theme) with a column for the tiles.
+    - Step 4 (done) dose screen (`dashboard/main/ui.c`, dark): banner date · time (30px), today's
+      doses as pills on the left (7 rows max, 23px; more: the window starts one row above the
+      next dose), the next dose as a big card in the middle (48px time, 30px name, "Late N min"
+      badge, red pulsing border when overdue; tap = TAKE, "Taking..." until the new state or
+      10 s), tile column on the right (weather, calendar, garage, package: placeholders). A
+      status line only when the node doesn't answer or the C5 isn't connected. States are
+      computed from the snapshot as `doses.c` does (taken bits only for the snapshot's date).
+      The S3's clock is set from the node's REPLY time. Fonts: the firmware's Inter fonts;
+      palette: `firmware/main/dose_colors.c`. User checked: layout, size/readability, colors,
+      no flicker.
+    - Step 5 (done) undo on the dashboard: hold a taken row 1 s (LVGL long-press time set to
+      1000 ms) -> dialog "Undo Karen 2100?" Keep / Undo -> UNTAKE (0x03) over the link -> the
+      XIAO sends TAKE with `TAKE_UNDO` -> the C5 undoes it like a Home "off". ~2 s round trip.
+    - Next (proposed): boot splash (Averak logo) and a view-only full schedule on the
+      dashboard; then Wi-Fi + weather, Cozi, garage/package switches. Schedule ownership stays on
+      the C5 (moving it would move the Home dose tiles to the XIAO and put the critical job on
+      the most complex device); editing from the dashboard (requests the C5 validates) only if
+      wanted later.
 
 - Licensing: Waveshare code is Apache-2.0. Keep headers on copied files and list them in a
   `THIRD_PARTY_LICENSES` file. `esp_xiaozhi` has its own license; don't copy it.
