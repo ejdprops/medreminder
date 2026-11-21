@@ -8,6 +8,7 @@
  *   POLL  panel -> node, every ~200 ms: u32 CRC of the dose state the panel holds (0: none).
  *   TAKE  panel -> node: u32 CRC as in POLL, u8 dose uid. Sent on to the main unit like a double
  *         tap on a round node (node_sync_request_take); the new state comes back in later replies.
+ *   UNTAKE panel -> node: as TAKE, undoes it.
  *   REPLY node -> panel, to both: link_status_t, then the doses_snapshot_t (up to defs[count]) when
  *         the panel's CRC differs from this node's.
  * The panel has no network: its clock comes from REPLY (UTC seconds; it applies the same TZ). */
@@ -145,9 +146,10 @@ static void task(void *arg)
         if (len >= 4) {
             memcpy(&panel_crc, p, 4);
         }
-        if (type == LINK_MSG_TAKE && len >= 5) {
-            ESP_LOGI(TAG, "panel takes dose %u", p[4]);
-            node_sync_request_take(p[4]);
+        if ((type == LINK_MSG_TAKE || type == LINK_MSG_UNTAKE) && len >= 5) {
+            bool take = type == LINK_MSG_TAKE;
+            ESP_LOGI(TAG, "panel %s dose %u", take ? "takes" : "undoes", p[4]);
+            node_sync_request_take(p[4], take);
         } else if (type != LINK_MSG_POLL) {
             ESP_LOGW(TAG, "unknown frame 0x%02x", type);
             continue;

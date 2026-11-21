@@ -1,19 +1,17 @@
-/* Double tap on the node's case, from the QMI8658 accelerometer. Detected here, not by the chip's
- * tap engine: on this board it never reported a tap (status stayed 0 while taps showed plainly in
- * the samples).
+/* Shake the node to take the next dose, from the QMI8658 accelerometer (replaced a double tap on
+ * the case: easier for the person using it). Detected here, not by the chip's motion engine (its
+ * tap engine never reported anything on this board).
  *
  * Every sample (500 Hz) is examined: the chip queues them in its FIFO and they are read in batches
- * every POLL_MS (reading only the latest sample each tick saw one in five and missed most taps,
- * whose spike lasts a few ms). A tap is a sharp jump: a sample more than TAP_MG away from the one
- * before, after QUIET_MS without a jump over QUIET_MG (so handling, carrying or
- * shaking doesn't count; the samples of the spike's own rise, ONSET_MS, are not "before"); then DEAD_MS is ignored while the case rings. Slow changes (the board
- * tilting under a finger, being turned) don't count either way: a slow gravity average lagged
- * behind them and turned real taps into "moving". Two taps DTAP_MIN_MS..DTAP_MAX_MS apart are a
- * double tap; closer ones start over.
+ * every POLL_MS. Gravity is a slow average of the samples (GRAVITY_SHIFT: ~0.5 s); what is left is
+ * motion. A swing is the motion going over SHAKE_MG (after falling under half of it, at least
+ * SWING_MIN_MS after the last swing); SHAKE_SWINGS swings within SHAKE_WINDOW_MS are a shake, then
+ * COOLDOWN_MS is ignored. Tilting or turning it slowly stays under the threshold; picking it up or a
+ * bump on the table makes one to three swings, spread out more.
  *
  * Register sequences (CTRL9 commands, FIFO read) after SensorLib's SensorQMI8658 (lewisxhe/SensorLib,
  * MIT); no code copied. */
-#include "imu_tap.h"
+#include "imu_shake.h"
 
 #include <sdkconfig.h>
 
@@ -31,15 +29,14 @@
 
 #include "mem_caps.h"
 
-static const char *TAG = "imu_tap";
+static const char *TAG = "imu_shake";
 
-#define DTAP_MIN_MS 500
-#define DTAP_MAX_MS 2000
-#define TAP_MG 150
-#define QUIET_MG 80
-#define QUIET_MS 100
-#define ONSET_MS 20 /* a tap's spike builds over a few samples: those don't count as "moving" */
-#define DEAD_MS 150
+#define SHAKE_MG 600
+#define SHAKE_SWINGS 4
+#define SHAKE_WINDOW_MS 1000
+#define SWING_MIN_MS 60 /* a swing's own wobble doesn't count twice */
+#define COOLDOWN_MS 2000
+#define GRAVITY_SHIFT 8 /* gravity += (sample - gravity) / 256 per sample: ~0.5 s at 500 Hz */
 
 #define POLL_MS 40
 #define SAMPLE_MS 2 /* 500 Hz */
@@ -65,7 +62,7 @@ static const char *TAG = "imu_tap";
 #define RESET 0x60
 
 static i2c_master_dev_handle_t s_dev;
-static volatile bool s_double;
+static volatile bool s_shake;
 
 static esp_err_t wr(uint8_t reg, uint8_t val)
 {
@@ -121,7 +118,7 @@ static bool setup(void)
     }
     bool ok = wr(CTRL1, 0x40) == ESP_OK      /* address auto-increment, little endian */
               && wr(CTRL8, 0x80) == ESP_OK   /* CTRL9 handshake on STATUS_INT bit 7 */
-              && wr(CTRL2, 0x24) == ESP_OK   /* +-8 g, 500 Hz (low-pass off: keep the tap's peak) */
+              && wr(CTRL2, 0x24) == ESP_OK   /* +-8 g, 500 Hz */
               && command(CMD_RST_FIFO) && wr(FIFO_CTRL, FIFO_STREAM_64) == ESP_OK &&
               wr(CTRL7, 0x01) == ESP_OK;     /* accelerometer only */
     if (!ok) {
@@ -130,60 +127,55 @@ static bool setup(void)
     return ok;
 }
 
-/* d2 (LSB^2) as mg, for the log */
-static int to_mg(int64_t d2)
-{
-    int mg = 0;
-    while ((int64_t)mg * mg * LSB_PER_G * LSB_PER_G < d2 * 1000000 && mg < 16000) {
-        mg += 25;
-    }
-    return mg;
-}
-
-/* One sample at time t (ms); NULL: invalid (the chip's -32768 marker), compare afresh after it */
+/* One sample at time t (ms); NULL: invalid (the chip's -32768 marker), skipped */
 static void sample(const int32_t s[3], int64_t t)
 {
-    static const int64_t tap_lsb = (int64_t)TAP_MG * LSB_PER_G / 1000, quiet_lsb = (int64_t)QUIET_MG * LSB_PER_G / 1000;
-    static int32_t prev[3];
-    static bool have_prev;
-    static int64_t last_tap, busy_until, last_loud, burst_start;
-    static bool burst_after_quiet; /* the current run of jumps began after QUIET_MS of calm */
+    static const int64_t shake_lsb = (int64_t)SHAKE_MG * LSB_PER_G / 1000;
+    static int32_t gravity[3]; /* << GRAVITY_SHIFT */
+    static bool have_gravity, over;
+    static int64_t swings[SHAKE_SWINGS], quiet_until;
+    static int n_swings;
     if (!s) {
-        have_prev = false;
         return;
+    }
+    if (!have_gravity) {
+        for (int i = 0; i < 3; i++) {
+            gravity[i] = s[i] << GRAVITY_SHIFT;
+        }
+        have_gravity = true;
     }
     int64_t d2 = 0;
     for (int i = 0; i < 3; i++) {
-        int32_t d = have_prev ? s[i] - prev[i] : 0;
+        gravity[i] += s[i] - (gravity[i] >> GRAVITY_SHIFT);
+        int32_t d = s[i] - (gravity[i] >> GRAVITY_SHIFT);
         d2 += (int64_t)d * d;
-        prev[i] = s[i];
     }
-    have_prev = true;
-    if (d2 > quiet_lsb * quiet_lsb) {
-        if (t - last_loud >= QUIET_MS) {
-            burst_start = t;
-            burst_after_quiet = true;
+    if (over) {
+        over = d2 > shake_lsb * shake_lsb / 4; /* back under half: ready for the next swing */
+        return;
+    }
+    if (d2 <= shake_lsb * shake_lsb || t < quiet_until) {
+        return;
+    }
+    over = true;
+    if (n_swings && t - swings[n_swings - 1] < SWING_MIN_MS) {
+        return;
+    }
+    /* Keep the swings within the window, add this one */
+    int k = 0;
+    for (int i = 0; i < n_swings; i++) {
+        if (t - swings[i] <= SHAKE_WINDOW_MS) {
+            swings[k++] = swings[i];
         }
-        last_loud = t;
     }
-    bool quiet_before = burst_after_quiet && t - burst_start <= ONSET_MS;
-    if (t < busy_until || d2 <= tap_lsb * tap_lsb) {
-        return;
-    }
-    busy_until = t + DEAD_MS;
-    if (!quiet_before) {
-        ESP_LOGI(TAG, "jolt ~%d mg while moving: not a tap", to_mg(d2));
-        last_tap = 0;
-        return;
-    }
-    int gap = last_tap ? (int)(t - last_tap) : -1;
-    ESP_LOGI(TAG, "tap ~%d mg, %d ms after the last", to_mg(d2), gap);
-    if (gap >= DTAP_MIN_MS && gap <= DTAP_MAX_MS) {
-        ESP_LOGI(TAG, "double tap");
-        s_double = true;
-        last_tap = 0;
-    } else {
-        last_tap = t;
+    n_swings = k < SHAKE_SWINGS ? k : SHAKE_SWINGS - 1;
+    swings[n_swings++] = t;
+    ESP_LOGI(TAG, "swing %d of %d", n_swings, SHAKE_SWINGS);
+    if (n_swings >= SHAKE_SWINGS) {
+        ESP_LOGI(TAG, "shake");
+        s_shake = true;
+        n_swings = 0;
+        quiet_until = t + COOLDOWN_MS;
     }
 }
 
@@ -212,7 +204,7 @@ static void task(void *arg)
         vTaskDeleteWithCaps(NULL);
         return;
     }
-    ESP_LOGI(TAG, "double tap: %d-%d ms apart", DTAP_MIN_MS, DTAP_MAX_MS);
+    ESP_LOGI(TAG, "shake: %d swings over %d mg within %d ms", SHAKE_SWINGS, SHAKE_MG, SHAKE_WINDOW_MS);
     static uint8_t buf[FIFO_MAX * 6];
     /* The first read after power-up holds junk (-32768s, a half-written sample): skip a while */
     int64_t start = esp_timer_get_time() / 1000 + 300;
@@ -236,26 +228,26 @@ static void task(void *arg)
     }
 }
 
-void imu_tap_start(void)
+void imu_shake_start(void)
 {
-    if (xTaskCreatePinnedToCoreWithCaps(task, "imu_tap", 3072, NULL, 2, NULL, tskNO_AFFINITY, MEM_CAPS_BULK) !=
+    if (xTaskCreatePinnedToCoreWithCaps(task, "imu_shake", 3072, NULL, 2, NULL, tskNO_AFFINITY, MEM_CAPS_BULK) !=
         pdPASS) {
         ESP_LOGE(TAG, "task create failed");
     }
 }
 
-bool imu_tap_take_double(void)
+bool imu_shake_take(void)
 {
-    bool d = s_double;
-    s_double = false;
+    bool d = s_shake;
+    s_shake = false;
     return d;
 }
 
 #else
 
-void imu_tap_start(void) {}
+void imu_shake_start(void) {}
 
-bool imu_tap_take_double(void)
+bool imu_shake_take(void)
 {
     return false;
 }

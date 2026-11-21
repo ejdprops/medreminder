@@ -10,9 +10,10 @@
  *           state goes to a node at most every STATE_MIN_S (so a node that can't keep it can't make
  *           it spin); a newer one goes at once.
  *   STATE   main -> node: the doses_snapshot_t, CRC in the header.
- *   TAKE    node -> main: take the dose with this uid (in the header's CRC field; a double tap on the
- *           node). Repeated every TAKE_RETRY_S, at most TAKE_TRIES times, until a STATE arrives (the
- *           take changes the main unit's state). Taking is idempotent, so a repeat does no harm.
+ *   TAKE    node -> main: take the dose with this uid (in the header's CRC field, bits 0-7; a shake
+ *           of a round node, the dashboard), or undo it with TAKE_UNDO set. Repeated every TAKE_RETRY_S, at most
+ *           TAKE_TRIES times, until a STATE arrives (the take changes the main unit's state). Taking and
+ *           undoing are idempotent, so a repeat does no harm.
  *
  * "Synced" on the main unit: heard within SYNCED_S and holding the current CRC. A node is forgotten
  * after FORGET_S of silence. The UI task hands states over with node_sync_publish /
@@ -50,6 +51,7 @@ static const char *TAG = "node_sync";
 #define TAKE_RETRY_S 2
 #define TAKE_TRIES 5
 #define TAKE_QUEUE 4
+#define TAKE_UNDO 0x100 /* in a TAKE's CRC field: undo instead of take */
 
 enum { MSG_BEACON = 1, MSG_HELLO = 2, MSG_STATE = 3, MSG_TAKE = 4 };
 
@@ -87,12 +89,13 @@ static bool s_main_known;
 static TickType_t s_main_heard;
 #if CONFIG_MEDREMINDER_ROLE_NODE
 static uint8_t s_take_uid;      /* take request being sent; 0 = none */
+static bool s_take_undo;        /* ...an undo */
 static int s_take_tries;
 static TickType_t s_take_sent;
 #else
 /* Main: nodes, and take requests from them (here -> UI task) */
 static node_t s_nodes[MAX_NODES];
-static uint8_t s_takes[TAKE_QUEUE];
+static uint16_t s_takes[TAKE_QUEUE]; /* uid | TAKE_UNDO */
 static int s_take_count;
 #endif
 /* Socket buffer: header + a full snapshot */
@@ -155,7 +158,7 @@ void node_sync_status(int *synced, int *known)
 #endif
 }
 
-void node_sync_request_take(uint8_t uid)
+void node_sync_request_take(uint8_t uid, bool take)
 {
 #if CONFIG_MEDREMINDER_ROLE_NODE
     if (!s_lock) {
@@ -163,17 +166,20 @@ void node_sync_request_take(uint8_t uid)
     }
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_take_uid = uid;
+    s_take_undo = !take;
     s_take_tries = 0;
     xSemaphoreGive(s_lock);
 #else
     (void)uid;
+    (void)take;
 #endif
 }
 
-bool node_sync_next_take(uint8_t *uid)
+bool node_sync_next_take(uint8_t *uid, bool *take)
 {
 #if CONFIG_MEDREMINDER_ROLE_NODE
     (void)uid;
+    (void)take;
     return false;
 #else
     if (!s_lock) {
@@ -182,8 +188,9 @@ bool node_sync_next_take(uint8_t *uid)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool got = s_take_count > 0;
     if (got) {
-        *uid = s_takes[0];
-        memmove(s_takes, s_takes + 1, --s_take_count);
+        *uid = (uint8_t)s_takes[0];
+        *take = !(s_takes[0] & TAKE_UNDO);
+        memmove(s_takes, s_takes + 1, --s_take_count * sizeof(s_takes[0]));
     }
     xSemaphoreGive(s_lock);
     return got;
@@ -300,11 +307,12 @@ static void main_rx(const hdr_t *h, const struct sockaddr_in6 *from)
 {
     static doses_snapshot_t snap; /* sent outside the lock */
     if (h->type == MSG_TAKE) {
-        uint8_t uid = (uint8_t)h->crc;
-        ESP_LOGI(TAG, "node %02x%02x%02x takes dose %u", h->id[3], h->id[4], h->id[5], uid);
+        uint16_t req = h->crc & (0xff | TAKE_UNDO);
+        ESP_LOGI(TAG, "node %02x%02x%02x %s dose %u", h->id[3], h->id[4], h->id[5],
+                 req & TAKE_UNDO ? "undoes" : "takes", req & 0xff);
         xSemaphoreTake(s_lock, portMAX_DELAY);
         if (s_take_count < TAKE_QUEUE) {
-            s_takes[s_take_count++] = uid;
+            s_takes[s_take_count++] = req;
         }
         xSemaphoreGive(s_lock);
         return;
@@ -400,9 +408,9 @@ static void node_tick(TickType_t *last_hello)
     uint32_t crc = s_mine_crc;
     bool known = s_main_known && !older_than(s_main_heard, CONNECTED_S);
     struct sockaddr_in6 to = s_main;
-    uint8_t take = 0;
+    uint32_t take = 0;
     if (s_take_uid && known && (s_take_tries == 0 || older_than(s_take_sent, TAKE_RETRY_S))) {
-        take = s_take_uid;
+        take = s_take_uid | (s_take_undo ? TAKE_UNDO : 0);
         s_take_sent = xTaskGetTickCount();
         if (++s_take_tries >= TAKE_TRIES) {
             s_take_uid = 0;
@@ -410,7 +418,8 @@ static void node_tick(TickType_t *last_hello)
     }
     xSemaphoreGive(s_lock);
     if (take) {
-        ESP_LOGI(TAG, "asking the main unit to take dose %u", take);
+        ESP_LOGI(TAG, "asking the main unit to %s dose %lu", take & TAKE_UNDO ? "undo" : "take",
+                 (unsigned long)(take & 0xff));
         send_to(&to, MSG_TAKE, take, NULL);
     }
     /* Report a new state right away (the ack after a STATE); look for the main unit while it's quiet */

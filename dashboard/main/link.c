@@ -1,7 +1,7 @@
 /* Panel side of the one-wire link to the XIAO C6 node (protocol: firmware/main/uart_link.c,
  * layouts: uart_link_proto.h). IO38 (GPIO_D, yellow wire), open-drain with pull-up, UART1 TX and
  * RX on the same pad: every frame we send comes back to us and is checked, then the node's reply
- * follows. Polls every POLL_MS; a take goes out as TAKE instead of the next POLL. */
+ * follows. Polls every POLL_MS; a take (undo) goes out as TAKE (UNTAKE) instead of the next POLL. */
 #include "link.h"
 
 #include <string.h>
@@ -28,6 +28,7 @@ static SemaphoreHandle_t s_lock;
 static link_view_t s_view;
 static bool s_doses_changed;
 static uint8_t s_take_uid; /* 0 = none */
+static bool s_take_undo;
 static int64_t s_last_ok_ms;
 static uint8_t s_buf[LINK_HDR_LEN + sizeof(link_status_t) + sizeof(doses_snapshot_t) + LINK_CRC_LEN];
 
@@ -95,12 +96,12 @@ static void task(void *arg)
         if (s_take_uid) {
             p[4] = s_take_uid;
             s_take_uid = 0;
-            type = LINK_MSG_TAKE;
+            type = s_take_undo ? LINK_MSG_UNTAKE : LINK_MSG_TAKE;
             n = 5;
         }
         xSemaphoreGive(s_lock);
-        if (type == LINK_MSG_TAKE) {
-            ESP_LOGI(TAG, "take dose uid %u", p[4]);
+        if (type != LINK_MSG_POLL) {
+            ESP_LOGI(TAG, "%s dose uid %u", type == LINK_MSG_TAKE ? "take" : "undo", p[4]);
         }
         const char *why = "";
         int len = transact(type, p, n, &why);
@@ -175,9 +176,10 @@ bool link_get(link_view_t *v)
     return changed;
 }
 
-void link_take(uint8_t uid)
+void link_take(uint8_t uid, bool take)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_take_uid = uid;
+    s_take_undo = !take;
     xSemaphoreGive(s_lock);
 }

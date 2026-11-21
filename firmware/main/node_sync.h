@@ -22,10 +22,10 @@ bool node_sync_take_state(doses_snapshot_t *snap);
 /* Main unit: nodes heard from recently (known) and how many of them hold the current state */
 void node_sync_status(int *synced, int *known);
 
-/* Node, UI task: ask the main unit to take the dose with this uid (retried until its new state
- * arrives). Main unit, UI task: the next take request from a node, if any. */
-void node_sync_request_take(uint8_t uid);
-bool node_sync_next_take(uint8_t *uid);
+/* Node: ask the main unit to take (take false: undo) the dose with this uid (retried until its new
+ * state arrives). Main unit, UI task: the next take/undo request from a node, if any. */
+void node_sync_request_take(uint8_t uid, bool take);
+bool node_sync_next_take(uint8_t *uid, bool *take);
 
 /* Node: the main unit was heard from recently */
 bool node_sync_connected(void);

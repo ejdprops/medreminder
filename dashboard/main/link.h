@@ -18,5 +18,5 @@ typedef struct {
 void link_start(void);
 /* A copy of the latest; true if the doses changed since the last call */
 bool link_get(link_view_t *v);
-/* Take the dose with this uid (the node sends it on to the C5) */
-void link_take(uint8_t uid);
+/* Take (take false: undo) the dose with this uid (the node sends it on to the C5) */
+void link_take(uint8_t uid, bool take);

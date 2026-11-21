@@ -9,7 +9,7 @@
 #define LINK_HDR_LEN 4 /* SOF, type, length u16 LE */
 #define LINK_CRC_LEN 4 /* esp_rom_crc32_le over type, length and payload, LE */
 
-enum { LINK_MSG_POLL = 0x01, LINK_MSG_TAKE = 0x02, LINK_MSG_REPLY = 0x81 };
+enum { LINK_MSG_POLL = 0x01, LINK_MSG_TAKE = 0x02, LINK_MSG_UNTAKE = 0x03, LINK_MSG_REPLY = 0x81 };
 enum { LINK_FLAG_MAIN_CONNECTED = 0x01 };
 
 /* REPLY payload; the doses_snapshot_t (up to defs[count]) follows when the panel's CRC is old */

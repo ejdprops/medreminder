@@ -24,7 +24,7 @@
 #include "fonts/fonts.h"
 #include "fw_version.h"
 #include "icons/icons.h"
-#include "imu_tap.h"
+#include "imu_shake.h"
 #include "matter_info.h"
 #include "node_sync.h"
 #include "time_sync.h"
@@ -371,17 +371,17 @@ static void build(void)
     label_at(s_screen, fw_version_short(), &inter_8, s_fg2, s_connected ? 214 : 228);
 }
 
-/* Double tap on the case: ask the main unit to take the next dose; the screen moves on when its new
+/* Shake: ask the main unit to take the next dose; the screen moves on when its new
  * state arrives (about a second). Without the main unit nothing happens ("Not synced" shows). */
-static void on_double_tap(void)
+static void on_shake(void)
 {
-    ui_sleep_wake("double tap");
+    ui_sleep_wake("shake");
     if (s_mode != MODE_DOSES || s_next < 0 || !node_sync_connected()) {
-        ESP_LOGI(TAG, "double tap: nothing to take");
+        ESP_LOGI(TAG, "shake: nothing to take");
         return;
     }
-    ESP_LOGI(TAG, "double tap: taking %s", dose_name(s_next));
-    node_sync_request_take(dose_def(s_next)->uid);
+    ESP_LOGI(TAG, "shake: taking %s", dose_name(s_next));
+    node_sync_request_take(dose_def(s_next)->uid, true);
     if (s_when_label) {
         lv_label_set_text(s_when_label, "Taking...");
     }
@@ -399,8 +399,8 @@ static void tick_cb(lv_timer_t *t)
         s_mode = mode;
         build();
     }
-    if (imu_tap_take_double()) {
-        on_double_tap();
+    if (imu_shake_take()) {
+        on_shake();
     }
     if (!s_time_label || !time_is_valid()) {
         return;

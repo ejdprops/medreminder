@@ -11,7 +11,7 @@ static const char *TAG = "ui";
 #if __has_include("bsp/esp-bsp.h")
 #include "bsp/esp-bsp.h"
 #include "images/images.h"
-#include "imu_tap.h"
+#include "imu_shake.h"
 #include "mem_caps.h"
 #include "ui_home.h"
 #include "ui_sleep.h"
@@ -70,7 +70,7 @@ static void ui_init_task(void *arg)
         }
         /* Audio shares the BSP's I2C bus and IO expander, which display start brought up */
         audio_start();
-        imu_tap_start(); /* nodes: double tap to take; I2C from the BSP like audio */
+        imu_shake_start(); /* nodes: shake to take; I2C from the BSP like audio */
     }
     vTaskDeleteWithCaps(NULL);
 }
