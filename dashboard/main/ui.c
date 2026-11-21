@@ -5,6 +5,9 @@
  *   Middle: the next dose as a big card; tap it to take it (TAKE over the link, the C5 decides).
  *   Right: tiles (weather, calendar, garage, package box), placeholders until those steps.
  *   Bottom: a status line, only when the link or the C5 is down.
+ * Boot: the Averak Labs logo for SPLASH_MS, then a fade to the dose screen (as the C5).
+ * Schedule (button top right): every dose with its days, view only (the C5 owns the schedule);
+ * back to the dose screen with Back or after SCHED_IDLE_MS untouched.
  * Dose states are worked out here from the node's snapshot exactly as the C5 does (doses.c). */
 #include "ui.h"
 
@@ -17,6 +20,7 @@
 
 #include "doses.h"
 #include "fonts/fonts.h"
+#include "images/images.h"
 #include "link.h"
 
 static const char *TAG = "ui";
@@ -49,10 +53,16 @@ static const char *TAG = "ui";
 #define LATE_TEXT 0xb91c1c
 #define TAKE_TIMEOUT_MS 10000
 #define HOLD_UNDO_MS 1000
+#define SPLASH_MS 5000
+#define SPLASH_BG 0x0b0d14 /* the logo's background */
+#define SCHED_IDLE_MS 60000
+#define SCHED_ROWS 8 /* per column; two columns = DOSE_MAX */
+#define BUTTON_BG 0x1f2937
 #define DIALOG_BG 0x111827
 #define UNDO_AMBER 0xfbbf24
 
 static lv_obj_t *s_date_label, *s_time_label, *s_dose_area, *s_status_label, *s_card_hint;
+static lv_obj_t *s_home, *s_sched, *s_sched_list;
 static link_view_t s_view; /* static: off the LVGL task stack */
 static dose_state_t s_states[DOSE_MAX];
 static int s_next = -1;
@@ -501,6 +511,129 @@ static uint32_t dose_sig(void)
     return sig;
 }
 
+/* ---- schedule (view only) ---- */
+
+static void days_text(uint8_t days, char *buf, int len)
+{
+    static const char *const names[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    if ((days & DOSE_DAILY) == DOSE_DAILY) {
+        snprintf(buf, len, "Daily");
+        return;
+    }
+    int n = 0;
+    buf[0] = 0;
+    for (int d = 0; d < 7; d++) {
+        if (days & (1u << d)) {
+            n += snprintf(buf + n, len - n, "%s%s", n ? " " : "", names[d]);
+        }
+    }
+}
+
+static void fill_schedule(void)
+{
+    lv_obj_clean(s_sched_list);
+    const doses_snapshot_t *s = &s_view.doses;
+    if (!s_view.have_doses || s->count == 0) {
+        label(s_sched_list, s_view.have_doses ? "No doses set up" : "Waiting for the doses...", &inter_23_semibold,
+              MUTED);
+        return;
+    }
+    int col_w = (W - 2 * PAD - PAD) / 2;
+    int row_h = (H - TOP - 44 - (SCHED_ROWS - 1) * ROW_GAP) / SCHED_ROWS;
+    for (int i = 0; i < s->count; i++) {
+        const dose_def_t *d = &s->defs[i];
+        uint32_t color = dose_color(i), fg = text_on(color);
+        lv_obj_t *row = plain_obj(s_sched_list);
+        lv_obj_set_size(row, col_w, row_h);
+        lv_obj_set_pos(row, (i / SCHED_ROWS) * (col_w + PAD), (i % SCHED_ROWS) * (row_h + ROW_GAP));
+        lv_obj_set_style_radius(row, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(row, lv_color_hex(color), 0);
+        lv_obj_set_style_pad_hor(row, 18, 0);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        lv_obj_set_style_pad_column(row, 12, 0);
+        char t[8], days[32];
+        fmt_time(d->minute, t, sizeof(t));
+        days_text(d->days, days, sizeof(days));
+        label(row, t, &inter_23_semibold, fg);
+        lv_obj_t *name = label(row, d->name, &inter_23_semibold, fg);
+        lv_obj_set_flex_grow(name, 1);
+        lv_obj_set_height(name, lv_font_get_line_height(&inter_23_semibold));
+        lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+        label(row, days, &inter_16_semibold, fg);
+    }
+    char foot[64];
+    snprintf(foot, sizeof(foot), "Overdue %u min after the time  \u00b7  edit on the main unit", s->overdue_min);
+    lv_obj_t *f = label(s_sched_list, foot, &inter_16_semibold, MUTED);
+    lv_obj_set_pos(f, 0, SCHED_ROWS * (row_h + ROW_GAP) + 6);
+}
+
+static lv_obj_t *nav_button(lv_obj_t *parent, const char *text, lv_event_cb_t cb)
+{
+    lv_obj_t *b = plain_obj(parent);
+    lv_obj_set_size(b, 150, 44);
+    lv_obj_set_style_radius(b, 12, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(BUTTON_BG), 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(TILE_BORDER), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_border_color(b, lv_color_hex(TILE_BORDER), 0);
+    lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(b, cb, LV_EVENT_SHORT_CLICKED, NULL);
+    lv_obj_center(label(b, text, &inter_23_semibold, TEXT));
+    return b;
+}
+
+static void sched_back_cb(lv_event_t *e)
+{
+    (void)e;
+    lv_screen_load(s_home);
+}
+
+static void sched_open_cb(lv_event_t *e)
+{
+    (void)e;
+    fill_schedule();
+    lv_screen_load(s_sched);
+}
+
+static void build_schedule_screen(void)
+{
+    s_sched = lv_obj_create(NULL);
+    lv_obj_remove_flag(s_sched, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(s_sched, lv_color_hex(BG), 0);
+    lv_obj_set_style_bg_opa(s_sched, LV_OPA_COVER, 0);
+    lv_obj_t *back = nav_button(s_sched, "Back", sched_back_cb);
+    lv_obj_set_pos(back, PAD, 8);
+    lv_obj_t *title = label(s_sched, "Dose schedule", &inter_30_semibold, TEXT);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 14);
+    s_sched_list = plain_obj(s_sched);
+    lv_obj_set_pos(s_sched_list, PAD, TOP);
+    lv_obj_set_size(s_sched_list, W - 2 * PAD, H - TOP);
+}
+
+/* ---- boot splash ---- */
+
+static void splash_done_cb(lv_timer_t *t)
+{
+    (void)t;
+    lv_screen_load_anim(s_home, LV_SCREEN_LOAD_ANIM_FADE_IN, 300, 0, true);
+}
+
+static void show_splash(void)
+{
+    lv_obj_t *splash = lv_screen_active();
+    lv_obj_remove_flag(splash, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(splash, lv_color_hex(SPLASH_BG), 0);
+    lv_obj_set_style_bg_opa(splash, LV_OPA_COVER, 0);
+    lv_obj_t *logo = lv_image_create(splash);
+    lv_image_set_src(logo, &img_averak_logo_large);
+    lv_obj_center(logo);
+    lv_timer_t *t = lv_timer_create(splash_done_cb, SPLASH_MS, NULL);
+    lv_timer_set_repeat_count(t, 1);
+}
+
 static void tick_cb(lv_timer_t *t)
 {
     (void)t;
@@ -522,6 +655,14 @@ static void tick_cb(lv_timer_t *t)
         changed = true; /* back to "Tap when taken" */
     }
     compute_states();
+    if (lv_screen_active() == s_sched) {
+        if (changed) {
+            fill_schedule();
+        }
+        if (lv_display_get_inactive_time(NULL) > SCHED_IDLE_MS) {
+            lv_screen_load(s_home);
+        }
+    }
     uint32_t sig = dose_sig();
     if (changed || sig != s_shown_sig) {
         s_shown_sig = sig;
@@ -550,7 +691,7 @@ static void tick_cb(lv_timer_t *t)
 
 void ui_start(void)
 {
-    lv_obj_t *scr = lv_screen_active();
+    lv_obj_t *scr = s_home = lv_obj_create(NULL); /* shown after the splash */
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_bg_color(scr, lv_color_hex(BG), 0);
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
@@ -562,6 +703,8 @@ void ui_start(void)
     lv_obj_set_style_pad_column(banner, 12, 0);
     s_date_label = label(banner, "", &inter_30_semibold, DATE_COLOR);
     s_time_label = label(banner, "", &inter_30_semibold, TIME_COLOR);
+    lv_obj_t *sched = nav_button(scr, "Schedule", sched_open_cb);
+    lv_obj_set_pos(sched, W - PAD - 150, 8);
 
     s_dose_area = plain_obj(scr);
     lv_obj_set_size(s_dose_area, W, H);
@@ -575,6 +718,8 @@ void ui_start(void)
     for (lv_indev_t *in = lv_indev_get_next(NULL); in; in = lv_indev_get_next(in)) {
         lv_indev_set_long_press_time(in, HOLD_UNDO_MS);
     }
+    build_schedule_screen();
+    show_splash();
     lv_timer_create(tick_cb, 1000, NULL);
     tick_cb(NULL);
 }

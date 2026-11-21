@@ -2,6 +2,6 @@
 # palette (dose_colors.c) and the Inter fonts
 set(FW ${CMAKE_CURRENT_LIST_DIR}/../../firmware/main)
 file(GLOB FONTS ${FW}/fonts/*.c)
-idf_component_register(SRCS "main.c" "board.c" "link.c" "ui.c" "${FW}/dose_colors.c" ${FONTS}
+idf_component_register(SRCS "main.c" "board.c" "link.c" "ui.c" "images/img_averak_logo_large.c" "${FW}/dose_colors.c" ${FONTS}
                        INCLUDE_DIRS "."
                        PRIV_INCLUDE_DIRS "${FW}")
