@@ -4,7 +4,7 @@
  *   taken row HOLD_UNDO_MS to undo it (after a confirm dialog), as on the C5.
  *   Left column: today's doses over the next dose as a card; tap the card to take it (TAKE over
  *   the link, the C5 decides).
- *   Middle column: calendar (placeholder until the Cozi step).
+ *   Middle column: the Cozi calendar, today and the next CAL_DAYS days (calendar.c).
  *   Right column: weather (Open-Meteo), a kitchen-style timer (5-60 min wheel, Start/Pause/Reset).
  *   Bottom: a status line, only when the link or the C5 is down.
  * Boot: the Averak Labs logo for SPLASH_MS, then a fade to the dose screen (as the C5).
@@ -20,6 +20,7 @@
 
 #include <esp_log.h>
 
+#include "calendar.h"
 #include "doses.h"
 #include "fonts/fonts.h"
 #include "icons/icons.h"
@@ -59,6 +60,14 @@ static const char *TAG = "ui";
 #define WEATHER_TITLE 0xbae6fd
 #define CALENDAR_BG 0x134e4a    /* deep teal */
 #define CALENDAR_TITLE 0x99f6e4
+#define CAL_BAND 0x0f766e       /* day header */
+#define CAL_BAND_TODAY 0x0d9488
+#define CAL_CHIP 0x1d6560       /* timed event */
+#define CAL_ALLDAY_EDGE 0x5eead4 /* all-day event: outlined */
+#define CAL_WHO_K 0x1f45e6      /* Karen: royal blue (dose palette 0) */
+#define CAL_WHO_E 0xdc2626      /* Evan: red */
+#define CAL_WHO_A 0x9333ea      /* All: purple */
+#define CAL_WHO_OTHER 0x6b7280
 #define TIMER_BG 0x4c1d95       /* deep purple */
 #define TIMER_TITLE 0xc4b5fd
 #define TIMER_WELL 0x2e1065     /* wheel background */
@@ -91,6 +100,7 @@ static const char *TAG = "ui";
 static lv_obj_t *s_date_label, *s_time_label, *s_dose_area, *s_status_label, *s_card_hint;
 static lv_obj_t *s_home, *s_sched, *s_sched_list;
 static lv_obj_t *s_wx_icon, *s_wx_temp, *s_wx_sky, *s_wx_day;
+static lv_obj_t *s_cal_body;
 static link_view_t s_view; /* static: off the LVGL task stack */
 static dose_state_t s_states[DOSE_MAX];
 static int s_next = -1;
@@ -812,12 +822,175 @@ static void build_timer(lv_obj_t *t)
     lv_timer_create(timer_tick_cb, 200, NULL);
 }
 
-/* Placeholder until the Cozi step */
+/* ---- calendar tile ---- */
+
+/* Each day: a band (brighter for today), then its events as chips: filled = timed, outlined =
+ * all day (or a timed event continuing from an earlier day) */
+#define CAL_HEAD_H 26
+#define CAL_HEAD_GAP 6 /* extra space above a band, except the first */
+#define CAL_ROW_H 26
+#define CAL_GAP 4      /* between rows (the body's pad_row) */
+#define CAL_TIME_W 44
+
+static void cal_badge(lv_obj_t *row, char who)
+{
+    uint32_t color = who == 'K' ? CAL_WHO_K : who == 'E' ? CAL_WHO_E : who == 'A' ? CAL_WHO_A : CAL_WHO_OTHER;
+    lv_obj_t *b = plain_obj(row);
+    lv_obj_set_size(b, 20, 20);
+    lv_obj_set_style_radius(b, 5, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(color), 0);
+    lv_obj_set_style_margin_right(b, 6, 0);
+    char text[2] = {who, 0};
+    lv_obj_center(label(b, text, &inter_12_bold, 0xffffff));
+}
+
+static void cal_line(lv_obj_t *parent, char who, const char *time_text, const char *title)
+{
+    lv_obj_t *row = plain_obj(parent);
+    lv_obj_set_size(row, LV_PCT(100), CAL_ROW_H);
+    lv_obj_set_style_radius(row, 8, 0);
+    lv_obj_set_style_pad_hor(row, 8, 0);
+    if (time_text) {
+        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(row, lv_color_hex(CAL_CHIP), 0);
+    } else {
+        lv_obj_set_style_border_width(row, 1, 0);
+        lv_obj_set_style_border_color(row, lv_color_hex(CAL_ALLDAY_EDGE), 0);
+        lv_obj_set_style_border_opa(row, LV_OPA_60, 0);
+    }
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_left(row, who ? 3 : 8, 0);
+    if (who) {
+        cal_badge(row, who);
+    }
+    if (time_text) {
+        lv_obj_t *t = label(row, time_text, &inter_16_semibold, CALENDAR_TITLE);
+        lv_obj_set_width(t, CAL_TIME_W);
+    }
+    lv_obj_t *l = label(row, title, &inter_16_semibold, TEXT);
+    lv_obj_set_flex_grow(l, 1);
+    lv_obj_set_height(l, lv_font_get_line_height(&inter_16_semibold));
+    lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+}
+
+static void cal_header(lv_obj_t *parent, int32_t day, int32_t today, bool first)
+{
+    static const char *const days[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+    static const char *const months[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+                                         "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
+    time_t t = (time_t)day * 86400 + 12 * 3600; /* noon UTC: the right date in any US zone */
+    struct tm tm;
+    gmtime_r(&t, &tm);
+    char date[16];
+    snprintf(date, sizeof(date), "%s %d %s", days[tm.tm_wday], tm.tm_mday, months[tm.tm_mon]);
+
+    lv_obj_t *band = plain_obj(parent);
+    lv_obj_set_size(band, LV_PCT(100), CAL_HEAD_H);
+    if (!first) {
+        lv_obj_set_style_margin_top(band, CAL_HEAD_GAP, 0);
+    }
+    lv_obj_set_style_radius(band, 6, 0);
+    lv_obj_set_style_bg_opa(band, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(band, lv_color_hex(day == today ? CAL_BAND_TODAY : CAL_BAND), 0);
+    lv_obj_set_style_pad_hor(band, 8, 0);
+    lv_obj_set_flex_flow(band, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(band, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(band, 8, 0);
+    if (day <= today + 1) {
+        label(band, day == today ? "TODAY" : "TOMORROW", &inter_16_bold, 0xffffff);
+        label(band, date, &inter_16_semibold, CALENDAR_TITLE);
+    } else {
+        label(band, date, &inter_16_bold, 0xffffff);
+    }
+}
+
+/* Rebuilt when the feed changes and every minute (events drop off once over, the day moves) */
+static void update_calendar(void)
+{
+    static calendar_t c;
+    static uint32_t shown_version;
+    static int32_t shown_minute = -1;
+    calendar_get(&c);
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    int32_t today = cal_day(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
+    int now_min = tm.tm_hour * 60 + tm.tm_min;
+    int32_t minute = clock_ok() ? today * 1440 + now_min : 0;
+    if (c.version == shown_version && minute == shown_minute) {
+        return;
+    }
+    shown_version = c.version;
+    shown_minute = minute;
+    lv_obj_clean(s_cal_body);
+
+    if (!c.valid) {
+        const char *msg = !calendar_configured() ? "Calendar not set up"
+                          : !wifi_connected()    ? "Connecting to Wi-Fi..."
+                                                 : "Loading...";
+        label(s_cal_body, msg, &inter_16_semibold, CALENDAR_TITLE);
+        return;
+    }
+    int room = lv_obj_get_content_height(s_cal_body), used = 0, shown = 0;
+    for (int32_t day = today; day < today + CAL_DAYS; day++) {
+        bool header = false;
+        /* All-day and continuing events first, then by time (the list is sorted that way per start day) */
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < c.count; i++) {
+                const cal_event_t *e = &c.ev[i];
+                if (day < e->first_day || day > e->last_day) {
+                    continue;
+                }
+                bool timed_here = e->start_min >= 0 && day == e->first_day;
+                if (timed_here != (pass == 1)) {
+                    continue;
+                }
+                if (day == today && e->start_min >= 0 &&
+                    (e->end_day < today || (e->end_day == today && e->end_min <= now_min))) {
+                    continue; /* over */
+                }
+                int need = CAL_ROW_H + CAL_GAP + (header ? 0 : CAL_HEAD_H + CAL_GAP + (used ? CAL_HEAD_GAP : 0));
+                if (used + need > room + CAL_GAP) {
+                    goto full;
+                }
+                if (!header) {
+                    cal_header(s_cal_body, day, today, used == 0);
+                    header = true;
+                }
+                char t[8] = "";
+                if (timed_here) {
+                    snprintf(t, sizeof(t), "%02d%02d", e->start_min / 60, e->start_min % 60);
+                }
+                cal_line(s_cal_body, e->who, timed_here ? t : NULL, e->title);
+                used += need;
+                shown++;
+            }
+        }
+    }
+full:
+    if (!shown && !used) {
+        label(s_cal_body, "Nothing in the next 2 weeks", &inter_16_semibold, CALENDAR_TITLE);
+    }
+}
+
+static void build_calendar(lv_obj_t *t)
+{
+    tile_colors(t, CALENDAR_BG, CALENDAR_TITLE);
+    s_cal_body = plain_obj(t);
+    lv_obj_set_width(s_cal_body, LV_PCT(100));
+    lv_obj_set_flex_grow(s_cal_body, 1);
+    lv_obj_set_flex_flow(s_cal_body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(s_cal_body, CAL_GAP, 0);
+    lv_obj_update_layout(t); /* its height decides how many rows fit */
+}
+
 static void build_tiles(lv_obj_t *scr)
 {
     /* Middle column: the calendar, full height. Right: weather level with the dose list, the
      * timer level with the card */
-    tile_colors(tile(scr, COL_X(1), TOP, COL_W, BOTTOM - TOP, "CALENDAR", "-"), CALENDAR_BG, CALENDAR_TITLE);
+    build_calendar(tile(scr, COL_X(1), TOP, COL_W, BOTTOM - TOP, "CALENDAR", NULL));
     build_weather(tile(scr, TILES_X, TOP, TILES_W, LIST_H, "WEATHER", NULL));
     build_timer(tile(scr, TILES_X, CARD_Y, TILES_W, CARD_H, "TIMER", NULL));
 }
@@ -1019,6 +1192,7 @@ static void tick_cb(lv_timer_t *t)
     }
     lv_label_set_text(s_status_label, problem ? problem : "");
     update_weather();
+    update_calendar();
 }
 
 void ui_start(void)

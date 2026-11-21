@@ -130,6 +130,10 @@ static void task(void *arg)
                     s_doses_changed = true;
                     ESP_LOGI(TAG, "doses: %u, date %lu, taken 0x%02lx", snap.count, (unsigned long)snap.date,
                              (unsigned long)snap.taken);
+                    for (int i = 0; i < snap.count; i++) { /* time and palette index, for matching colors */
+                        ESP_LOGI(TAG, "  %02d%02d color %u", snap.defs[i].minute / 60, snap.defs[i].minute % 60,
+                                 snap.defs[i].color);
+                    }
                 } else {
                     ESP_LOGW(TAG, "dose state of %d bytes doesn't fit %u doses", body, snap.count);
                 }

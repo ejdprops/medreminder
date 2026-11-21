@@ -1,11 +1,13 @@
 /* MedReminder dashboard: CrowPanel 7" next to the pills, fed by a XIAO C6 node over one wire
- * (link.c). The screen is ui.c; the panel hardware board.c; Wi-Fi (wifi.c) feeds the weather tile. */
+ * (link.c). The screen is ui.c; the panel hardware board.c; Wi-Fi (wifi.c) feeds the weather and
+ * calendar tiles. */
 #include <stdlib.h>
 #include <time.h>
 
 #include <esp_log.h>
 
 #include "board.h"
+#include "calendar.h"
 #include "link.h"
 #include "ui.h"
 #include "weather.h"
@@ -31,5 +33,6 @@ void app_main(void)
     /* After the display: Wi-Fi only feeds the weather/calendar tiles */
     wifi_start();
     weather_start();
+    calendar_start();
     ESP_LOGI(TAG, "started");
 }
