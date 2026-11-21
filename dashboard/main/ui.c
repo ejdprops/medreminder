@@ -2,8 +2,10 @@
  *   Top: date · 24 h time.
  *   Left: today's doses in their colors (taken rows get a check, overdue rows a red border); hold a
  *   taken row HOLD_UNDO_MS to undo it (after a confirm dialog), as on the C5.
- *   Middle: the next dose as a big card; tap it to take it (TAKE over the link, the C5 decides).
- *   Right: tiles (weather, calendar, garage, package box), placeholders until those steps.
+ *   Left column: today's doses over the next dose as a card; tap the card to take it (TAKE over
+ *   the link, the C5 decides).
+ *   Middle column: calendar (placeholder until the Cozi step).
+ *   Right column: weather (Open-Meteo), a kitchen-style timer (5-60 min wheel, Start/Pause/Reset).
  *   Bottom: a status line, only when the link or the C5 is down.
  * Boot: the Averak Labs logo for SPLASH_MS, then a fade to the dose screen (as the C5).
  * Schedule (button top right): every dose with its days, view only (the C5 owns the schedule);
@@ -20,8 +22,11 @@
 
 #include "doses.h"
 #include "fonts/fonts.h"
+#include "icons/icons.h"
 #include "images/images.h"
 #include "link.h"
+#include "weather.h"
+#include "wifi.h"
 
 static const char *TAG = "ui";
 
@@ -31,15 +36,37 @@ static const char *TAG = "ui";
 #define BANNER_H 60
 #define TOP (BANNER_H + 8)
 #define BOTTOM (H - 36) /* status line below */
-#define LIST_X PAD
-#define LIST_W 300
-#define LIST_ROWS 7
-#define ROW_GAP 8
-#define CARD_X (LIST_X + LIST_W + PAD)
-#define CARD_W 236
-#define TILES_X (CARD_X + CARD_W + PAD)
-#define TILES_W (W - PAD - TILES_X)
-#define TILE_GAP 8
+/* Three equal columns: doses (list over the next-dose card) | calendar | weather, garage, package */
+#define COL_W ((W - 4 * PAD) / 3)
+#define COL_X(c) (PAD + (c) * (COL_W + PAD))
+#define LIST_X COL_X(0)
+#define LIST_W COL_W
+#define LIST_H ((BOTTOM - TOP - PAD) / 2)
+#define LIST_ROWS 5 /* as on the C5 */
+#define LIST_FONT inter_16_semibold
+#define ROW_GAP 6
+#define CARD_X COL_X(0)
+#define CARD_Y (TOP + LIST_H + PAD)
+#define CARD_W COL_W
+#define CARD_H (BOTTOM - CARD_Y)
+#define TILES_X COL_X(2)
+#define TILES_W COL_W
+#define WX_ICON_COLOR 0xfbbf24 /* sun */
+#define WX_CLOUD_COLOR 0xd1d5db
+#define WX_RAIN_COLOR 0xbae6fd /* light: the tile is blue */
+/* Tile colors: background, title, and for the timer the wheel/buttons on it */
+#define WEATHER_BG 0x075985     /* dark sky blue */
+#define WEATHER_TITLE 0xbae6fd
+#define CALENDAR_BG 0x134e4a    /* deep teal */
+#define CALENDAR_TITLE 0x99f6e4
+#define TIMER_BG 0x4c1d95       /* deep purple */
+#define TIMER_TITLE 0xc4b5fd
+#define TIMER_WELL 0x2e1065     /* wheel background */
+#define TIMER_BUTTON 0x6d28d9
+#define TIMER_EDGE 0x7c3aed
+#define TIMER_STEP_MIN 5
+#define TIMER_STEPS 12 /* 5 ... 60 min */
+#define TIMER_DEFAULT 1 /* 10 min */
 
 #define BG 0x0b0c0f
 #define TEXT 0xe5e7eb
@@ -63,6 +90,7 @@ static const char *TAG = "ui";
 
 static lv_obj_t *s_date_label, *s_time_label, *s_dose_area, *s_status_label, *s_card_hint;
 static lv_obj_t *s_home, *s_sched, *s_sched_list;
+static lv_obj_t *s_wx_icon, *s_wx_temp, *s_wx_sky, *s_wx_day;
 static link_view_t s_view; /* static: off the LVGL task stack */
 static dose_state_t s_states[DOSE_MAX];
 static int s_next = -1;
@@ -300,11 +328,11 @@ static void build_list(lv_obj_t *area)
     int n = today_list(idx);
     lv_obj_t *list = plain_obj(area);
     lv_obj_set_pos(list, LIST_X, TOP);
-    lv_obj_set_size(list, LIST_W, BOTTOM - TOP);
+    lv_obj_set_size(list, LIST_W, LIST_H);
     lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(list, ROW_GAP, 0);
     if (n == 0) {
-        label(list, s_view.have_doses ? "No doses today" : "Waiting for the doses...", &inter_23_semibold, MUTED);
+        label(list, s_view.have_doses ? "No doses today" : "Waiting for the doses...", &LIST_FONT, MUTED);
         return;
     }
     /* More rows than fit: start so the next dose shows (one row of context above it) */
@@ -318,7 +346,7 @@ static void build_list(lv_obj_t *area)
         first = first > n - LIST_ROWS ? n - LIST_ROWS : first;
     }
     int rows = n < LIST_ROWS ? n : LIST_ROWS;
-    int row_h = (BOTTOM - TOP - (LIST_ROWS - 1) * ROW_GAP) / LIST_ROWS;
+    int row_h = (LIST_H - (LIST_ROWS - 1) * ROW_GAP) / LIST_ROWS;
     for (int k = first; k < first + rows; k++) {
         int i = idx[k];
         const dose_def_t *d = &s_view.doses.defs[i];
@@ -328,22 +356,22 @@ static void build_list(lv_obj_t *area)
         lv_obj_set_style_radius(row, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(row, lv_color_hex(color), 0);
-        lv_obj_set_style_pad_hor(row, 18, 0);
+        lv_obj_set_style_pad_hor(row, 12, 0);
         lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        lv_obj_set_style_pad_column(row, 12, 0);
+        lv_obj_set_style_pad_column(row, 8, 0);
         if (s_states[i] == DOSE_OVERDUE) {
-            overdue_border(row, 3);
+            overdue_border(row, 2);
         }
         char t[8];
         fmt_time(d->minute, t, sizeof(t));
-        label(row, t, &inter_23_semibold, fg);
-        lv_obj_t *name = label(row, d->name, &inter_23_semibold, fg);
+        label(row, t, &LIST_FONT, fg);
+        lv_obj_t *name = label(row, d->name, &LIST_FONT, fg);
         lv_obj_set_flex_grow(name, 1);
-        lv_obj_set_height(name, lv_font_get_line_height(&inter_23_semibold));
+        lv_obj_set_height(name, lv_font_get_line_height(&LIST_FONT));
         lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
         if (s_states[i] == DOSE_TAKEN) {
-            label(row, "✓", &inter_23_semibold, fg);
+            label(row, "✓", &LIST_FONT, fg);
             lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_set_style_bg_color(row, lv_color_lighten(lv_color_hex(color), LV_OPA_20), LV_STATE_PRESSED);
             lv_obj_add_event_cb(row, row_hold_cb, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)i);
@@ -373,10 +401,14 @@ static void build_done_card(lv_obj_t *card)
     lv_obj_set_style_bg_color(card, lv_color_hex(TILE_BG), 0);
     lv_obj_set_style_border_width(card, 1, 0);
     lv_obj_set_style_border_color(card, lv_color_hex(TILE_BORDER), 0);
-    label(card, "✓", &inter_48_bold, OK_GREEN);
     bool any = today_list((int[DOSE_MAX]){0}) > 0;
-    lv_obj_t *big = label(card, any ? "All done\ntoday" : "No doses\ntoday", &inter_30_semibold, TEXT);
-    lv_obj_set_flex_grow(big, 1);
+    lv_obj_t *top = plain_obj(card);
+    lv_obj_set_size(top, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(top, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(top, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(top, 10, 0);
+    label(top, "✓", &inter_30_semibold, OK_GREEN);
+    label(top, any ? "All done today" : "No doses today", &inter_23_semibold, TEXT);
     if (!clock_ok()) {
         return;
     }
@@ -399,11 +431,11 @@ static void build_done_card(lv_obj_t *card)
 static void build_card(lv_obj_t *area)
 {
     lv_obj_t *card = plain_obj(area);
-    lv_obj_set_pos(card, CARD_X, TOP);
-    lv_obj_set_size(card, CARD_W, BOTTOM - TOP);
-    lv_obj_set_style_radius(card, 24, 0);
+    lv_obj_set_pos(card, CARD_X, CARD_Y);
+    lv_obj_set_size(card, CARD_W, CARD_H);
+    lv_obj_set_style_radius(card, 16, 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
-    lv_obj_set_style_pad_all(card, 18, 0);
+    lv_obj_set_style_pad_all(card, 14, 0);
     lv_obj_set_flex_flow(card, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(card, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     s_card_hint = NULL;
@@ -422,23 +454,23 @@ static void build_card(lv_obj_t *area)
     lv_obj_set_style_bg_color(card, lv_color_lighten(lv_color_hex(color), LV_OPA_20), LV_STATE_PRESSED);
     bool overdue = s_states[i] == DOSE_OVERDUE;
     if (overdue) {
-        overdue_border(card, 5);
-        lv_obj_set_style_pad_all(card, 14, 0);
+        overdue_border(card, 4);
+        lv_obj_set_style_pad_all(card, 10, 0);
     }
     lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(card, card_tap_cb, LV_EVENT_SHORT_CLICKED, (void *)(intptr_t)i);
 
     char t[8];
     fmt_time(d->minute, t, sizeof(t));
-    label(card, t, &inter_48_bold, fg);
+    label(card, t, &inter_30_semibold, fg);
 
     lv_obj_t *mid = plain_obj(card);
     lv_obj_set_size(mid, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_flex_flow(mid, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(mid, 8, 0);
-    lv_obj_t *name = label(mid, d->name, &inter_30_semibold, fg);
+    lv_obj_set_style_pad_row(mid, 6, 0);
+    lv_obj_t *name = label(mid, d->name, &inter_23_semibold, fg);
     lv_obj_set_width(name, LV_PCT(100));
-    lv_obj_set_height(name, 2 * lv_font_get_line_height(&inter_30_semibold));
+    lv_obj_set_height(name, lv_font_get_line_height(&inter_23_semibold));
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     if (overdue) {
         lv_obj_t *badge = plain_obj(mid);
@@ -446,8 +478,8 @@ static void build_card(lv_obj_t *area)
         lv_obj_set_style_radius(badge, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_bg_opa(badge, LV_OPA_COVER, 0);
         lv_obj_set_style_bg_color(badge, lv_color_white(), 0);
-        lv_obj_set_style_pad_hor(badge, 12, 0);
-        lv_obj_set_style_pad_ver(badge, 4, 0);
+        lv_obj_set_style_pad_hor(badge, 10, 0);
+        lv_obj_set_style_pad_ver(badge, 2, 0);
         int late = late_min(i);
         char text[24];
         if (late < 60) {
@@ -457,11 +489,11 @@ static void build_card(lv_obj_t *area)
         }
         label(badge, text, &inter_16_bold, LATE_TEXT);
     }
-    s_card_hint = label(card, s_taking_uid ? "Taking..." : "Tap when taken", &inter_23_semibold, fg);
+    s_card_hint = label(card, s_taking_uid ? "Taking..." : "Tap when taken", &inter_16_semibold, fg);
     lv_obj_set_width(s_card_hint, LV_PCT(100));
 }
 
-static void tile(lv_obj_t *area, int x, int y, int w, int h, const char *title, const char *body)
+static lv_obj_t *tile(lv_obj_t *area, int x, int y, int w, int h, const char *title, const char *body)
 {
     lv_obj_t *t = plain_obj(area);
     lv_obj_set_pos(t, x, y);
@@ -473,22 +505,321 @@ static void tile(lv_obj_t *area, int x, int y, int w, int h, const char *title, 
     lv_obj_set_flex_flow(t, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(t, 6, 0);
     label(t, title, &inter_16_bold, MUTED);
-    lv_obj_t *b = label(t, body, &inter_16_semibold, TEXT);
-    lv_obj_set_width(b, LV_PCT(100));
+    if (body) {
+        lv_obj_t *b = label(t, body, &inter_16_semibold, TEXT);
+        lv_obj_set_width(b, LV_PCT(100));
+    }
+    return t;
 }
 
-/* Placeholders until the tiles get their data (weather, Cozi: Wi-Fi; garage, package: the XIAO) */
+static void tile_colors(lv_obj_t *t, uint32_t bg, uint32_t title)
+{
+    lv_obj_set_style_bg_color(t, lv_color_hex(bg), 0);
+    lv_obj_set_style_text_color(lv_obj_get_child(t, 0), lv_color_hex(title), 0);
+}
+
+/* Weather tile: "52 F" big with the sky next to it, then today's high/low and rain chance
+ * (the fonts have no degree sign) */
+static void build_weather(lv_obj_t *t)
+{
+    tile_colors(t, WEATHER_BG, WEATHER_TITLE);
+    /* Under the title, centered in the rest of the tile: icon + temperature, sky, the day */
+    lv_obj_t *body = plain_obj(t);
+    lv_obj_set_width(body, LV_PCT(100));
+    lv_obj_set_flex_grow(body, 1);
+    lv_obj_set_flex_flow(body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(body, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(body, 4, 0);
+    lv_obj_t *now = plain_obj(body);
+    lv_obj_set_size(now, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(now, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(now, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(now, 12, 0);
+    s_wx_icon = lv_image_create(now);
+    lv_obj_set_style_image_recolor_opa(s_wx_icon, LV_OPA_COVER, 0);
+    lv_obj_add_flag(s_wx_icon, LV_OBJ_FLAG_HIDDEN);
+    s_wx_temp = label(now, "", &inter_30_semibold, TEXT);
+    s_wx_sky = label(body, "", &inter_16_semibold, TEXT);
+    s_wx_day = label(body, "", &inter_16_semibold, WEATHER_TITLE);
+    lv_obj_set_style_text_align(s_wx_day, LV_TEXT_ALIGN_CENTER, 0);
+}
+
+/* Icon and its color for a WMO code (NULL: none) */
+static const lv_image_dsc_t *weather_icon(int code, uint32_t *color)
+{
+    *color = WX_CLOUD_COLOR;
+    if (code <= 1) {
+        *color = WX_ICON_COLOR;
+        return &icon_wx_sun;
+    }
+    if (code == 2) {
+        return &icon_wx_partly;
+    }
+    if (code == 3) {
+        return &icon_wx_cloud;
+    }
+    if (code == 45 || code == 48) {
+        return &icon_wx_fog;
+    }
+    if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) {
+        *color = WX_RAIN_COLOR;
+        return &icon_wx_rain;
+    }
+    if ((code >= 71 && code <= 77) || code == 85 || code == 86) {
+        return &icon_wx_snow;
+    }
+    if (code >= 95) {
+        *color = WX_ICON_COLOR;
+        return &icon_wx_storm;
+    }
+    return NULL;
+}
+
+static void set_text(lv_obj_t *l, const char *text)
+{
+    if (strcmp(lv_label_get_text(l), text) != 0) {
+        lv_label_set_text(l, text);
+    }
+}
+
+static void update_weather(void)
+{
+    weather_t w;
+    weather_get(&w);
+    char temp[16] = "", sky[40] = "", day[64] = "";
+    if (!wifi_configured()) {
+        snprintf(sky, sizeof(sky), "Wi-Fi not set up");
+    } else if (!w.valid) {
+        snprintf(sky, sizeof(sky), wifi_connected() ? "Loading..." : "Connecting to Wi-Fi...");
+    } else {
+        snprintf(temp, sizeof(temp), "%d F", w.temp_f);
+        snprintf(sky, sizeof(sky), "%s", weather_text(w.code));
+        int n = snprintf(day, sizeof(day), "H %d  \u00b7  L %d  \u00b7  Rain %d%%", w.high_f, w.low_f, w.rain_pct);
+        /* More than an hour old (Wi-Fi or Open-Meteo down): say when it's from */
+        if (clock_ok() && time(NULL) - w.fetched > 3600) {
+            struct tm tm;
+            localtime_r(&w.fetched, &tm);
+            snprintf(day + n, sizeof(day) - n, "\nas of %02d%02d", tm.tm_hour, tm.tm_min);
+        }
+    }
+    uint32_t color;
+    const lv_image_dsc_t *icon = w.valid ? weather_icon(w.code, &color) : NULL;
+    if (icon) {
+        if (lv_image_get_src(s_wx_icon) != icon) {
+            lv_image_set_src(s_wx_icon, icon);
+            lv_obj_set_style_image_recolor(s_wx_icon, lv_color_hex(color), 0);
+        }
+        lv_obj_remove_flag(s_wx_icon, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_wx_icon, LV_OBJ_FLAG_HIDDEN);
+    }
+    set_text(s_wx_temp, temp);
+    set_text(s_wx_sky, sky);
+    set_text(s_wx_day, day);
+}
+
+/* ---- timer tile ---- */
+
+typedef enum { TIMER_IDLE, TIMER_RUNNING, TIMER_PAUSED, TIMER_DONE } timer_state_t;
+
+static timer_state_t s_timer;
+static uint32_t s_timer_left_ms, s_timer_since; /* running: left_ms at since (lv_tick) */
+static lv_obj_t *s_timer_roller, *s_timer_label, *s_timer_start, *s_timer_pause, *s_timer_done;
+
+static uint32_t timer_set_ms(void)
+{
+    return (lv_roller_get_selected(s_timer_roller) + 1) * TIMER_STEP_MIN * 60000u;
+}
+
+static uint32_t timer_left_ms(void)
+{
+    if (s_timer != TIMER_RUNNING) {
+        return s_timer_left_ms;
+    }
+    uint32_t gone = lv_tick_elaps(s_timer_since);
+    return gone >= s_timer_left_ms ? 0 : s_timer_left_ms - gone;
+}
+
+static void enable(lv_obj_t *o, bool on)
+{
+    if (on) {
+        lv_obj_remove_state(o, LV_STATE_DISABLED);
+    } else {
+        lv_obj_add_state(o, LV_STATE_DISABLED);
+    }
+}
+
+static void timer_show(void)
+{
+    uint32_t s = (timer_left_ms() + 999) / 1000; /* 0:01 until it is really over */
+    char text[16];
+    snprintf(text, sizeof(text), "%u:%02u", (unsigned)(s / 60), (unsigned)(s % 60));
+    set_text(s_timer_label, s_timer == TIMER_DONE ? "Done" : text);
+    lv_obj_set_style_text_color(s_timer_label, lv_color_hex(s_timer == TIMER_PAUSED ? TIMER_TITLE : TEXT), 0);
+    enable(s_timer_roller, s_timer == TIMER_IDLE);
+    enable(s_timer_start, s_timer == TIMER_IDLE || s_timer == TIMER_PAUSED);
+    enable(s_timer_pause, s_timer == TIMER_RUNNING);
+}
+
+static void timer_reset(void)
+{
+    if (s_timer_done) {
+        lv_obj_delete(s_timer_done);
+        s_timer_done = NULL;
+    }
+    s_timer = TIMER_IDLE;
+    s_timer_left_ms = timer_set_ms();
+    timer_show();
+}
+
+static void timer_done_cb(lv_event_t *e)
+{
+    (void)e;
+    timer_reset();
+}
+
+/* Full screen, over whichever screen is showing; any tap dismisses it and resets the timer */
+static void timer_done_open(void)
+{
+    s_timer_done = plain_obj(lv_layer_top());
+    lv_obj_set_size(s_timer_done, W, H);
+    lv_obj_set_style_bg_opa(s_timer_done, LV_OPA_70, 0);
+    lv_obj_set_style_bg_color(s_timer_done, lv_color_black(), 0);
+    lv_obj_add_flag(s_timer_done, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_timer_done, timer_done_cb, LV_EVENT_SHORT_CLICKED, NULL);
+    lv_obj_t *box = plain_obj(s_timer_done);
+    lv_obj_set_size(box, 460, LV_SIZE_CONTENT);
+    lv_obj_center(box);
+    lv_obj_set_style_radius(box, 20, 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(box, lv_color_hex(DIALOG_BG), 0);
+    overdue_border(box, 4);
+    lv_obj_set_style_pad_all(box, 24, 0);
+    lv_obj_set_style_pad_row(box, 12, 0);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(box, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_remove_flag(box, LV_OBJ_FLAG_CLICKABLE); /* taps go through to the backdrop */
+    label(box, "Timer done", &inter_48_bold, TEXT);
+    char text[24];
+    snprintf(text, sizeof(text), "%u min", (unsigned)(timer_set_ms() / 60000));
+    label(box, text, &inter_23_semibold, MUTED);
+    label(box, "Tap anywhere to close", &inter_16_semibold, MUTED);
+}
+
+static void timer_tick_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_timer == TIMER_RUNNING && timer_left_ms() == 0) {
+        ESP_LOGI(TAG, "timer done");
+        s_timer = TIMER_DONE;
+        s_timer_left_ms = 0;
+        timer_done_open();
+    }
+    timer_show();
+}
+
+static void timer_button_cb(lv_event_t *e)
+{
+    lv_obj_t *b = lv_event_get_target(e);
+    if (b == s_timer_start && (s_timer == TIMER_IDLE || s_timer == TIMER_PAUSED)) {
+        if (s_timer == TIMER_IDLE) {
+            s_timer_left_ms = timer_set_ms();
+        }
+        s_timer_since = lv_tick_get();
+        s_timer = TIMER_RUNNING;
+    } else if (b == s_timer_pause && s_timer == TIMER_RUNNING) {
+        s_timer_left_ms = timer_left_ms();
+        s_timer = TIMER_PAUSED;
+    } else if (b != s_timer_start && b != s_timer_pause) {
+        timer_reset();
+        return;
+    }
+    timer_show();
+}
+
+static void timer_roller_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_timer == TIMER_IDLE) {
+        s_timer_left_ms = timer_set_ms();
+        timer_show();
+    }
+}
+
+static lv_obj_t *timer_button(lv_obj_t *parent, const char *text)
+{
+    lv_obj_t *b = plain_obj(parent);
+    lv_obj_set_height(b, 36);
+    lv_obj_set_flex_grow(b, 1);
+    lv_obj_set_style_radius(b, 10, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(TIMER_BUTTON), 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(TIMER_EDGE), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_border_color(b, lv_color_hex(TIMER_EDGE), 0);
+    lv_obj_set_style_opa(b, LV_OPA_40, LV_STATE_DISABLED);
+    lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(b, timer_button_cb, LV_EVENT_SHORT_CLICKED, NULL);
+    lv_obj_center(label(b, text, &inter_16_semibold, TEXT));
+    return b;
+}
+
+static void build_timer(lv_obj_t *t)
+{
+    tile_colors(t, TIMER_BG, TIMER_TITLE);
+    /* Wheel pinned to the left edge; the time centered in the rest (its width changes) */
+    lv_obj_t *top = plain_obj(t);
+    lv_obj_set_width(top, LV_PCT(100));
+    lv_obj_set_flex_grow(top, 1);
+    lv_obj_set_flex_flow(top, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(top, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    char opts[TIMER_STEPS * 8] = "";
+    for (int i = 1; i <= TIMER_STEPS; i++) {
+        char o[10];
+        snprintf(o, sizeof(o), "%s%d min", i > 1 ? "\n" : "", i * TIMER_STEP_MIN);
+        strcat(opts, o);
+    }
+    s_timer_roller = lv_roller_create(top);
+    lv_roller_set_options(s_timer_roller, opts, LV_ROLLER_MODE_NORMAL);
+    lv_roller_set_visible_row_count(s_timer_roller, 3);
+    lv_roller_set_selected(s_timer_roller, TIMER_DEFAULT, LV_ANIM_OFF);
+    lv_obj_set_width(s_timer_roller, 96);
+    lv_obj_set_style_text_font(s_timer_roller, &inter_16_semibold, 0);
+    lv_obj_set_style_text_font(s_timer_roller, &inter_16_semibold, LV_PART_SELECTED);
+    lv_obj_set_style_text_line_space(s_timer_roller, 10, 0);
+    lv_obj_set_style_bg_color(s_timer_roller, lv_color_hex(TIMER_WELL), 0);
+    lv_obj_set_style_text_color(s_timer_roller, lv_color_hex(TIMER_TITLE), 0);
+    lv_obj_set_style_border_color(s_timer_roller, lv_color_hex(TIMER_EDGE), 0);
+    lv_obj_set_style_bg_color(s_timer_roller, lv_color_hex(TIMER_BUTTON), LV_PART_SELECTED);
+    lv_obj_set_style_text_color(s_timer_roller, lv_color_hex(TEXT), LV_PART_SELECTED);
+    lv_obj_set_style_opa(s_timer_roller, LV_OPA_40, LV_STATE_DISABLED);
+    lv_obj_add_event_cb(s_timer_roller, timer_roller_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    s_timer_label = label(top, "", &inter_30_semibold, TEXT);
+    lv_obj_set_flex_grow(s_timer_label, 1);
+    lv_obj_set_style_text_align(s_timer_label, LV_TEXT_ALIGN_CENTER, 0);
+
+    lv_obj_t *buttons = plain_obj(t);
+    lv_obj_set_size(buttons, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(buttons, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(buttons, 8, 0);
+    s_timer_start = timer_button(buttons, "Start");
+    s_timer_pause = timer_button(buttons, "Pause");
+    timer_button(buttons, "Reset");
+
+    timer_reset();
+    lv_timer_create(timer_tick_cb, 200, NULL);
+}
+
+/* Placeholder until the Cozi step */
 static void build_tiles(lv_obj_t *scr)
 {
-    int h = BOTTOM - TOP;
-    int weather_h = 120, small_h = 96;
-    int cal_h = h - weather_h - small_h - 2 * TILE_GAP;
-    int half = (TILES_W - TILE_GAP) / 2;
-    tile(scr, TILES_X, TOP, TILES_W, weather_h, "WEATHER", "-");
-    tile(scr, TILES_X, TOP + weather_h + TILE_GAP, TILES_W, cal_h, "CALENDAR", "-");
-    int y = BOTTOM - small_h;
-    tile(scr, TILES_X, y, half, small_h, "GARAGE", "-");
-    tile(scr, TILES_X + half + TILE_GAP, y, half, small_h, "PACKAGE", "-");
+    /* Middle column: the calendar, full height. Right: weather level with the dose list, the
+     * timer level with the card */
+    tile_colors(tile(scr, COL_X(1), TOP, COL_W, BOTTOM - TOP, "CALENDAR", "-"), CALENDAR_BG, CALENDAR_TITLE);
+    build_weather(tile(scr, TILES_X, TOP, TILES_W, LIST_H, "WEATHER", NULL));
+    build_timer(tile(scr, TILES_X, CARD_Y, TILES_W, CARD_H, "TIMER", NULL));
 }
 
 static void rebuild_doses(void)
@@ -687,6 +1018,7 @@ static void tick_cb(lv_timer_t *t)
         problem = "Main unit not connected: doses may be out of date";
     }
     lv_label_set_text(s_status_label, problem ? problem : "");
+    update_weather();
 }
 
 void ui_start(void)

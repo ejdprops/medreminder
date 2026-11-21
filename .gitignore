@@ -29,3 +29,4 @@ dashboard/build/
 dashboard/managed_components/
 dashboard/sdkconfig
 dashboard/sdkconfig.old
+dashboard/secrets.h
