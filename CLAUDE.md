@@ -556,8 +556,12 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
     - Step 5 (done) undo on the dashboard: hold a taken row 1 s (LVGL long-press time set to
       1000 ms) -> dialog "Undo Karen 2100?" Keep / Undo -> UNTAKE (0x03) over the link -> the
       XIAO sends TAKE with `TAKE_UNDO` -> the C5 undoes it like a Home "off". ~2 s round trip.
-    - Next (proposed): boot splash (Averak logo) and a view-only full schedule on the
-      dashboard; then Wi-Fi + weather, Cozi, garage/package switches. Schedule ownership stays on
+    - Step 6 (done) boot splash and schedule view: the Averak Labs cyber logo (263x380 RGB565,
+      `dashboard/main/images/`, from `firmware/main/images/src/averak_labs_cyber.png` with
+      `firmware/tools/png_image.py --height 380`) for 5 s, then a fade to the dose screen. A
+      "Schedule" button (top right) opens every dose in two columns of 8 (time, name, "Daily" or
+      weekdays) and the overdue setting, view only; Back, or 60 s untouched, returns.
+    - Next: Wi-Fi + weather, Cozi, garage/package switches. Schedule ownership stays on
       the C5 (moving it would move the Home dose tiles to the XIAO and put the critical job on
       the most complex device); editing from the dashboard (requests the C5 validates) only if
       wanted later.
