@@ -219,7 +219,7 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
   **NS4168** I2S class-D amp, **BCLK IO42, LRCLK IO18, DATA IO17** (all free), CTRL pulled to 3V3
   (always on, no enable pin), powered from **3V3** (the 5V option R50 is not fitted: ~0.5-1 W).
   Output via 10 uF series caps + 1 nF to GND (weak lows: tones of 1-4 kHz carry best) to **J5, JST
-  PH 2.0 2-pin**. Speaker bought: 3 W 8 ohm with a PH 2.0 plug (not yet fitted or coded).
+  PH 2.0 2-pin**. Speaker: 3 W 8 ohm with a PH 2.0 plug, on J5 (`dashboard/main/audio.c`, 7h step 11).
 - Pin test / link tester: `~/esp/crowpanel_pintest` (outside this repo; `HANDOFF.md` there). Phase 3
   polls the XIAO and logs replies; BOOT (GPIO0) sends TAKE for the next pending dose.
 
@@ -637,6 +637,23 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
         the next 0630; sun by night = the day screen at 40% until 2 min untouched, morning, or a
         dose turns overdue. Icons: `main/icons/mode/` (28px, own `icons.h`; the weather icons are
         48px and the tool renders one size per run).
+    - Step 11 (done, tested) speaker + memory fix (`audio.c`, `lv_mem_psram.c`):
+      - I2S0 std Philips, 16 kHz, 16-bit stereo (same sample both slots), BCLK 42 / WS 18 / DOUT 17.
+        The channel stays enabled with `auto_clear` (zeros between sounds; the amp has no enable
+        and never pops). Sounds rendered into PSRAM at start (`AUDIO_ALERT` = the C5's C6-E6-G6);
+        `audio_play(sound, volume)`, volume 1-100 on a 40 dB scale (15% is soft, 100% loud by the
+        bed; user checked 15/30/45/60/75/100). Task stack and copy buffer in PSRAM; only the 4 KB
+        DMA buffers are internal.
+      - **Internal RAM on the panel:** with `LV_USE_CLIB_MALLOC` every LVGL object stayed internal
+        (`SPIRAM_MALLOC_ALWAYSINTERNAL` 16384); the night screen doubled them: 7 KB free, min 0,
+        Wi-Fi `m f null`, TLS `esp-aes: Failed to allocate memory` (weather failed), and with the
+        audio task the PHY aborted (`phy_track_pll_init` ESP_ERR_NO_MEM, reboot; the I2S DMA kept
+        looping during the abort: pops/hiss). Fix: `CONFIG_LV_USE_CUSTOM_MALLOC` with
+        `lv_mem_psram.c` (PSRAM first; `-u lv_malloc_core` in main/CMakeLists.txt or the linker
+        drops it). Now 53 KB free, min 38 KB. **Don't set `SPIRAM_MALLOC_ALWAYSINTERNAL=0` here**:
+        the LVGL adapter's RGB panel context must be internal ("user context not in internal
+        RAM", vsync callbacks not registered, display frozen on the splash).
+      - `main.c` logs `heap: internal free ..., min ..., largest ...; psram free ...` every 10 s.
     - Bedtime plan (agreed 2026-11-22), still to do, in order:
       1. C5: no chime for overdue BED doses (2000 and later) or anything overdue in the night
          window, **only while the dashboard panel is connected** (the XIAO reports panel status
