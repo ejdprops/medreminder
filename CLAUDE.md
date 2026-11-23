@@ -621,8 +621,34 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
         until HHMM" every 3 s.
     - The panel logs each dose's time and palette index when a new dose state arrives
       (`link:   1900 color 0`), for matching colors.
-    - Next: speaker (audio.c like the C5's: timer chime, overdue chime on the dashboard and
-      whether the C5 should keep chiming too, volume). Schedule ownership stays on
+    - Step 10 (done, tested) night mode (the panel lives on the bedroom headboard; `ui.c`). Night
+      window 2130-0630 (`NIGHT_START`/`NIGHT_END`; `NIGHT_TEST` 1 forces night for testing):
+      - Night screen (`s_night`, separate from the day screen, red on black, outlined tiles):
+        three full-height columns: next dose (10px stripe in its dose color, 48px time, 30px name,
+        "Late N min", tap = take, Snooze button), calendar (same feed, badges as outlined
+        letters), weather (48px temperature). Weather/calendar code fills both screens
+        (`wx_view_t`, `cal_view_t` + `cal_pal_t`).
+      - Backlight (MT9201 PWM): 12% picked in a dark room from a 0.1-20% sweep. Screen off
+        unless tapped (a full-screen shield on the top layer swallows the waking touch; 12%;
+        off `NIGHT_WAKE_MS` 30 s after the last touch) or a dose is overdue and not snoozed: on,
+        12/20/30/45% by snoozes used (`NIGHT_STAGE_PCT`), all 4 used: flashing 45/100% (1 s).
+        During a snooze the screen may go off.
+      - Moon/sun button bottom center (status line moved bottom left): moon by day = night until
+        the next 0630; sun by night = the day screen at 40% until 2 min untouched, morning, or a
+        dose turns overdue. Icons: `main/icons/mode/` (28px, own `icons.h`; the weather icons are
+        48px and the tool renders one size per run).
+    - Bedtime plan (agreed 2026-11-22), still to do, in order:
+      1. C5: no chime for overdue BED doses (2000 and later) or anything overdue in the night
+         window, **only while the dashboard panel is connected** (the XIAO reports panel status
+         to the C5, e.g. in HELLO); otherwise chime as before. Home notifications either way.
+         The C5 also sends when the final stage (all snoozes used) began, so a restarted panel
+         resumes at the right volume.
+      2. Panel speaker (NS4168, pins above; `audio.c` like the C5's): overdue tone starting
+         quiet (15%) and stepping up after each snooze ends (30/45/60/75%); after the 4th snooze
+         ends, a tone every 2 min, +5% every 10 min up to 100%, until taken or midnight. Timer
+         chime too.
+      3. Day brightness: 80% when touched, 20% after 10 min untouched, full while a dose is due.
+    - Schedule ownership stays on
       the C5 (moving it would move the Home dose tiles to the XIAO and put the critical job on
       the most complex device); editing from the dashboard (requests the C5 validates) only if
       wanted later.
