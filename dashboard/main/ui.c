@@ -10,6 +10,13 @@
  * Boot: the Averak Labs logo for SPLASH_MS, then a fade to the dose screen (as the C5).
  * Schedule (button top right): every dose with its days, view only (the C5 owns the schedule);
  * back to the dose screen with Back or after SCHED_IDLE_MS untouched.
+ * Night (NIGHT_START-NIGHT_END; the panel is on the bedroom headboard): a separate night screen,
+ * red on black, three tiles (the next dose with a stripe in its color: tap to take, Snooze; the
+ * calendar; the weather). The screen is off unless tapped (the first tap only wakes it, at
+ * NIGHT_PCT; off again NIGHT_WAKE_MS after the last touch) or a dose is overdue and not snoozed:
+ * then it stays on, brighter after each snooze used (NIGHT_STAGE_PCT), flashing once all are used.
+ * A moon / sun button bottom center switches by hand: night until the next NIGHT_END, or the day
+ * screen at night at DAY_AT_NIGHT_PCT until DAY_AT_NIGHT_MS untouched (or a dose turns overdue).
  * Dose states are worked out here from the node's snapshot exactly as the C5 does (doses.c). */
 #include "ui.h"
 
@@ -20,10 +27,12 @@
 
 #include <esp_log.h>
 
+#include "board.h"
 #include "calendar.h"
 #include "doses.h"
 #include "fonts/fonts.h"
 #include "icons/icons.h"
+#include "icons/mode/icons.h"
 #include "images/images.h"
 #include "link.h"
 #include "weather.h"
@@ -101,10 +110,45 @@ static const char *TAG = "ui";
 #define DIALOG_BG 0x111827
 #define UNDO_AMBER 0xfbbf24
 
+/* Night mode (times in minutes of the day) */
+#define NIGHT_TEST 0 /* 1: always night (testing) */
+#define NIGHT_START (21 * 60 + 30)
+#define NIGHT_END (6 * 60 + 30)
+#define NIGHT_WAKE_MS 30000
+#define NIGHT_PCT 12 /* backlight when woken (picked in a dark room) */
+#define FLASH_LO_PCT 45 /* all snoozes used: flashing between these, 1 s each */
+#define FLASH_HI_PCT 100
+#define DAY_PCT 100
+#define DAY_AT_NIGHT_PCT 40 /* the day screen asked for at night (sun button) */
+#define DAY_AT_NIGHT_MS 120000 /* ...back to night after this long untouched */
+#define MODE_BTN_W 88
+#define MODE_BTN_H 32
+static const uint8_t NIGHT_STAGE_PCT[DOSE_SNOOZE_MAX] = {12, 20, 30, 45}; /* by snoozes used */
+#define NIGHT_BG 0x000000
+#define NIGHT_RED 0xdc2626 /* main text */
+#define NIGHT_DIM 0x991b1b /* titles, secondary text */
+#define NIGHT_EDGE 0x7f1d1d /* tile borders */
+#define NIGHT_FILL 0x2a0707 /* calendar bands/chips, pressed */
+#define NIGHT_FILL_HI 0x450a0a /* today's band */
+#define NIGHT_STRIPE_W 10
+
 static lv_obj_t *s_date_label, *s_time_label, *s_dose_area, *s_status_label, *s_card_hint;
 static lv_obj_t *s_home, *s_sched, *s_sched_list;
-static lv_obj_t *s_wx_icon, *s_wx_temp, *s_wx_sky, *s_wx_day;
-static lv_obj_t *s_cal_body;
+static lv_obj_t *s_night, *s_ndate_label, *s_ntime_label, *s_nstatus_label, *s_night_dose_area;
+static lv_obj_t *s_night_hint, *s_night_snooze_label, *s_shield;
+/* Weather and calendar: one on each screen, filled from the same data */
+typedef struct {
+    lv_obj_t *icon, *temp, *sky, *day;
+    bool night;
+} wx_view_t;
+static wx_view_t s_wx, s_nwx;
+typedef struct {
+    lv_obj_t *body;
+    bool night;
+    uint32_t version; /* what it shows */
+    int32_t minute;
+} cal_view_t;
+static cal_view_t s_cal, s_ncal;
 static link_view_t s_view; /* static: off the LVGL task stack */
 static dose_state_t s_states[DOSE_MAX];
 static int s_next = -1;
@@ -241,11 +285,11 @@ static void pulse_exec(void *obj, int32_t v)
     lv_obj_set_style_border_opa(obj, (lv_opa_t)v, 0);
 }
 
-/* Red border, fading in and out */
-static void overdue_border(lv_obj_t *o, int width)
+/* Border fading in and out */
+static void pulse_border(lv_obj_t *o, int width, uint32_t color)
 {
     lv_obj_set_style_border_width(o, width, 0);
-    lv_obj_set_style_border_color(o, lv_color_hex(OVERDUE_RED), 0);
+    lv_obj_set_style_border_color(o, lv_color_hex(color), 0);
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, o);
@@ -255,6 +299,11 @@ static void overdue_border(lv_obj_t *o, int width)
     lv_anim_set_playback_duration(&a, 700);
     lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
     lv_anim_start(&a);
+}
+
+static void overdue_border(lv_obj_t *o, int width)
+{
+    pulse_border(o, width, OVERDUE_RED);
 }
 
 static void confirm_close(void)
@@ -411,6 +460,9 @@ static void card_tap_cb(lv_event_t *e)
     if (s_card_hint) {
         lv_label_set_text(s_card_hint, "Taking...");
     }
+    if (s_night_hint) {
+        lv_label_set_text(s_night_hint, "Taking...");
+    }
 }
 
 static void build_done_card(lv_obj_t *card)
@@ -466,6 +518,9 @@ static void snooze_tap_cb(lv_event_t *e)
     link_snooze();
     if (s_snooze_label) {
         lv_label_set_text(s_snooze_label, "Snoozing...");
+    }
+    if (s_night_snooze_label) {
+        lv_label_set_text(s_night_snooze_label, "Snoozing...");
     }
 }
 
@@ -607,9 +662,12 @@ static void tile_colors(lv_obj_t *t, uint32_t bg, uint32_t title)
 
 /* Weather tile: "52 F" big with the sky next to it, then today's high/low and rain chance
  * (the fonts have no degree sign) */
-static void build_weather(lv_obj_t *t)
+static void build_weather(lv_obj_t *t, wx_view_t *v, bool night)
 {
-    tile_colors(t, WEATHER_BG, WEATHER_TITLE);
+    v->night = night;
+    if (!night) {
+        tile_colors(t, WEATHER_BG, WEATHER_TITLE);
+    }
     /* Under the title, centered in the rest of the tile: icon + temperature, sky, the day */
     lv_obj_t *body = plain_obj(t);
     lv_obj_set_width(body, LV_PCT(100));
@@ -622,13 +680,17 @@ static void build_weather(lv_obj_t *t)
     lv_obj_set_flex_flow(now, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(now, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(now, 12, 0);
-    s_wx_icon = lv_image_create(now);
-    lv_obj_set_style_image_recolor_opa(s_wx_icon, LV_OPA_COVER, 0);
-    lv_obj_add_flag(s_wx_icon, LV_OBJ_FLAG_HIDDEN);
-    s_wx_temp = label(now, "", &inter_30_semibold, TEXT);
-    s_wx_sky = label(body, "", &inter_16_semibold, TEXT);
-    s_wx_day = label(body, "", &inter_16_semibold, WEATHER_TITLE);
-    lv_obj_set_style_text_align(s_wx_day, LV_TEXT_ALIGN_CENTER, 0);
+    v->icon = lv_image_create(now);
+    lv_obj_set_style_image_recolor_opa(v->icon, LV_OPA_COVER, 0);
+    if (night) {
+        lv_obj_set_style_image_recolor(v->icon, lv_color_hex(NIGHT_RED), 0);
+    }
+    lv_obj_add_flag(v->icon, LV_OBJ_FLAG_HIDDEN);
+    /* Night: the tile is the full column, so the temperature can be bigger */
+    v->temp = label(now, "", night ? &inter_48_bold : &inter_30_semibold, night ? NIGHT_RED : TEXT);
+    v->sky = label(body, "", night ? &inter_23_semibold : &inter_16_semibold, night ? NIGHT_RED : TEXT);
+    v->day = label(body, "", &inter_16_semibold, night ? NIGHT_DIM : WEATHER_TITLE);
+    lv_obj_set_style_text_align(v->day, LV_TEXT_ALIGN_CENTER, 0);
 }
 
 /* Icon and its color for a WMO code (NULL: none) */
@@ -691,18 +753,24 @@ static void update_weather(void)
     }
     uint32_t color;
     const lv_image_dsc_t *icon = w.valid ? weather_icon(w.code, &color) : NULL;
-    if (icon) {
-        if (lv_image_get_src(s_wx_icon) != icon) {
-            lv_image_set_src(s_wx_icon, icon);
-            lv_obj_set_style_image_recolor(s_wx_icon, lv_color_hex(color), 0);
+    wx_view_t *views[] = {&s_wx, &s_nwx};
+    for (int k = 0; k < 2; k++) {
+        wx_view_t *v = views[k];
+        if (icon) {
+            if (lv_image_get_src(v->icon) != icon) {
+                lv_image_set_src(v->icon, icon);
+                if (!v->night) { /* night: always red */
+                    lv_obj_set_style_image_recolor(v->icon, lv_color_hex(color), 0);
+                }
+            }
+            lv_obj_remove_flag(v->icon, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(v->icon, LV_OBJ_FLAG_HIDDEN);
         }
-        lv_obj_remove_flag(s_wx_icon, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(s_wx_icon, LV_OBJ_FLAG_HIDDEN);
+        set_text(v->temp, temp);
+        set_text(v->sky, sky);
+        set_text(v->day, day);
     }
-    set_text(s_wx_temp, temp);
-    set_text(s_wx_sky, sky);
-    set_text(s_wx_day, day);
 }
 
 /* ---- timer tile ---- */
@@ -909,20 +977,35 @@ static void build_timer(lv_obj_t *t)
 #define CAL_GAP 4      /* between rows (the body's pad_row) */
 #define CAL_TIME_W 44
 
-static void cal_badge(lv_obj_t *row, char who)
+/* Day: the tile's teal; night: red on black, badges outlined (no person colors) */
+typedef struct {
+    uint32_t title, text, band, band_today, band_text, chip, edge;
+    bool night;
+} cal_pal_t;
+static const cal_pal_t CAL_DAY = {CALENDAR_TITLE, TEXT, CAL_BAND, CAL_BAND_TODAY, 0xffffff, CAL_CHIP, CAL_ALLDAY_EDGE,
+                                  false};
+static const cal_pal_t CAL_NIGHT = {NIGHT_DIM, NIGHT_RED, NIGHT_FILL, NIGHT_FILL_HI, NIGHT_RED, NIGHT_FILL, NIGHT_EDGE,
+                                    true};
+
+static void cal_badge(lv_obj_t *row, char who, const cal_pal_t *p)
 {
     uint32_t color = who == 'K' ? CAL_WHO_K : who == 'E' ? CAL_WHO_E : who == 'A' ? CAL_WHO_A : CAL_WHO_OTHER;
     lv_obj_t *b = plain_obj(row);
     lv_obj_set_size(b, 20, 20);
     lv_obj_set_style_radius(b, 5, 0);
-    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(b, lv_color_hex(color), 0);
+    if (p->night) {
+        lv_obj_set_style_border_width(b, 1, 0);
+        lv_obj_set_style_border_color(b, lv_color_hex(NIGHT_DIM), 0);
+    } else {
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(b, lv_color_hex(color), 0);
+    }
     lv_obj_set_style_margin_right(b, 6, 0);
     char text[2] = {who, 0};
-    lv_obj_center(label(b, text, &inter_12_bold, 0xffffff));
+    lv_obj_center(label(b, text, &inter_12_bold, p->night ? NIGHT_RED : 0xffffff));
 }
 
-static void cal_line(lv_obj_t *parent, char who, const char *time_text, const char *title)
+static void cal_line(lv_obj_t *parent, char who, const char *time_text, const char *title, const cal_pal_t *p)
 {
     lv_obj_t *row = plain_obj(parent);
     lv_obj_set_size(row, LV_PCT(100), CAL_ROW_H);
@@ -930,29 +1013,29 @@ static void cal_line(lv_obj_t *parent, char who, const char *time_text, const ch
     lv_obj_set_style_pad_hor(row, 8, 0);
     if (time_text) {
         lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_color(row, lv_color_hex(CAL_CHIP), 0);
+        lv_obj_set_style_bg_color(row, lv_color_hex(p->chip), 0);
     } else {
         lv_obj_set_style_border_width(row, 1, 0);
-        lv_obj_set_style_border_color(row, lv_color_hex(CAL_ALLDAY_EDGE), 0);
-        lv_obj_set_style_border_opa(row, LV_OPA_60, 0);
+        lv_obj_set_style_border_color(row, lv_color_hex(p->edge), 0);
+        lv_obj_set_style_border_opa(row, p->night ? LV_OPA_COVER : LV_OPA_60, 0);
     }
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_left(row, who ? 3 : 8, 0);
     if (who) {
-        cal_badge(row, who);
+        cal_badge(row, who, p);
     }
     if (time_text) {
-        lv_obj_t *t = label(row, time_text, &inter_16_semibold, CALENDAR_TITLE);
+        lv_obj_t *t = label(row, time_text, &inter_16_semibold, p->title);
         lv_obj_set_width(t, CAL_TIME_W);
     }
-    lv_obj_t *l = label(row, title, &inter_16_semibold, TEXT);
+    lv_obj_t *l = label(row, title, &inter_16_semibold, p->text);
     lv_obj_set_flex_grow(l, 1);
     lv_obj_set_height(l, lv_font_get_line_height(&inter_16_semibold));
     lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
 }
 
-static void cal_header(lv_obj_t *parent, int32_t day, int32_t today, bool first)
+static void cal_header(lv_obj_t *parent, int32_t day, int32_t today, bool first, const cal_pal_t *p)
 {
     static const char *const days[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
     static const char *const months[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
@@ -970,53 +1053,50 @@ static void cal_header(lv_obj_t *parent, int32_t day, int32_t today, bool first)
     }
     lv_obj_set_style_radius(band, 6, 0);
     lv_obj_set_style_bg_opa(band, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(band, lv_color_hex(day == today ? CAL_BAND_TODAY : CAL_BAND), 0);
+    lv_obj_set_style_bg_color(band, lv_color_hex(day == today ? p->band_today : p->band), 0);
     lv_obj_set_style_pad_hor(band, 8, 0);
     lv_obj_set_flex_flow(band, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(band, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_column(band, 8, 0);
     if (day <= today + 1) {
-        label(band, day == today ? "TODAY" : "TOMORROW", &inter_16_bold, 0xffffff);
-        label(band, date, &inter_16_semibold, CALENDAR_TITLE);
+        label(band, day == today ? "TODAY" : "TOMORROW", &inter_16_bold, p->band_text);
+        label(band, date, &inter_16_semibold, p->title);
     } else {
-        label(band, date, &inter_16_bold, 0xffffff);
+        label(band, date, &inter_16_bold, p->band_text);
     }
 }
 
 /* Rebuilt when the feed changes and every minute (events drop off once over, the day moves) */
-static void update_calendar(void)
+static void update_calendar(cal_view_t *v, const calendar_t *c)
 {
-    static calendar_t c;
-    static uint32_t shown_version;
-    static int32_t shown_minute = -1;
-    calendar_get(&c);
+    const cal_pal_t *p = v->night ? &CAL_NIGHT : &CAL_DAY;
     time_t now = time(NULL);
     struct tm tm;
     localtime_r(&now, &tm);
     int32_t today = cal_day(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday);
     int now_min = tm.tm_hour * 60 + tm.tm_min;
     int32_t minute = clock_ok() ? today * 1440 + now_min : 0;
-    if (c.version == shown_version && minute == shown_minute) {
+    if (c->version == v->version && minute == v->minute) {
         return;
     }
-    shown_version = c.version;
-    shown_minute = minute;
-    lv_obj_clean(s_cal_body);
+    v->version = c->version;
+    v->minute = minute;
+    lv_obj_clean(v->body);
 
-    if (!c.valid) {
+    if (!c->valid) {
         const char *msg = !calendar_configured() ? "Calendar not set up"
                           : !wifi_connected()    ? "Connecting to Wi-Fi..."
                                                  : "Loading...";
-        label(s_cal_body, msg, &inter_16_semibold, CALENDAR_TITLE);
+        label(v->body, msg, &inter_16_semibold, p->title);
         return;
     }
-    int room = lv_obj_get_content_height(s_cal_body), used = 0, shown = 0;
+    int room = lv_obj_get_content_height(v->body), used = 0, shown = 0;
     for (int32_t day = today; day < today + CAL_DAYS; day++) {
         bool header = false;
         /* All-day and continuing events first, then by time (the list is sorted that way per start day) */
         for (int pass = 0; pass < 2; pass++) {
-            for (int i = 0; i < c.count; i++) {
-                const cal_event_t *e = &c.ev[i];
+            for (int i = 0; i < c->count; i++) {
+                const cal_event_t *e = &c->ev[i];
                 if (day < e->first_day || day > e->last_day) {
                     continue;
                 }
@@ -1033,14 +1113,14 @@ static void update_calendar(void)
                     goto full;
                 }
                 if (!header) {
-                    cal_header(s_cal_body, day, today, used == 0);
+                    cal_header(v->body, day, today, used == 0, p);
                     header = true;
                 }
                 char t[8] = "";
                 if (timed_here) {
                     snprintf(t, sizeof(t), "%02d%02d", e->start_min / 60, e->start_min % 60);
                 }
-                cal_line(s_cal_body, e->who, timed_here ? t : NULL, e->title);
+                cal_line(v->body, e->who, timed_here ? t : NULL, e->title, p);
                 used += need;
                 shown++;
             }
@@ -1048,18 +1128,30 @@ static void update_calendar(void)
     }
 full:
     if (!shown && !used) {
-        label(s_cal_body, "Nothing in the next 2 weeks", &inter_16_semibold, CALENDAR_TITLE);
+        label(v->body, "Nothing in the next 2 weeks", &inter_16_semibold, p->title);
     }
 }
 
-static void build_calendar(lv_obj_t *t)
+static void update_calendars(void)
 {
-    tile_colors(t, CALENDAR_BG, CALENDAR_TITLE);
-    s_cal_body = plain_obj(t);
-    lv_obj_set_width(s_cal_body, LV_PCT(100));
-    lv_obj_set_flex_grow(s_cal_body, 1);
-    lv_obj_set_flex_flow(s_cal_body, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(s_cal_body, CAL_GAP, 0);
+    static calendar_t c; /* static: big */
+    calendar_get(&c);
+    update_calendar(&s_cal, &c);
+    update_calendar(&s_ncal, &c);
+}
+
+static void build_calendar(lv_obj_t *t, cal_view_t *v, bool night)
+{
+    if (!night) {
+        tile_colors(t, CALENDAR_BG, CALENDAR_TITLE);
+    }
+    v->night = night;
+    v->minute = -1;
+    v->body = plain_obj(t);
+    lv_obj_set_width(v->body, LV_PCT(100));
+    lv_obj_set_flex_grow(v->body, 1);
+    lv_obj_set_flex_flow(v->body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(v->body, CAL_GAP, 0);
     lv_obj_update_layout(t); /* its height decides how many rows fit */
 }
 
@@ -1067,9 +1159,218 @@ static void build_tiles(lv_obj_t *scr)
 {
     /* Middle column: the calendar, full height. Right: weather level with the dose list, the
      * timer level with the card */
-    build_calendar(tile(scr, COL_X(1), TOP, COL_W, BOTTOM - TOP, "CALENDAR", NULL));
-    build_weather(tile(scr, TILES_X, TOP, TILES_W, LIST_H, "WEATHER", NULL));
+    build_calendar(tile(scr, COL_X(1), TOP, COL_W, BOTTOM - TOP, "CALENDAR", NULL), &s_cal, false);
+    build_weather(tile(scr, TILES_X, TOP, TILES_W, LIST_H, "WEATHER", NULL), &s_wx, false);
     build_timer(tile(scr, TILES_X, CARD_Y, TILES_W, CARD_H, "TIMER", NULL));
+}
+
+/* ---- bottom strip (both screens): status bottom left, the day/night button in the middle ---- */
+
+/* Only when the link or the C5 is down; kept left of the mode button */
+static lv_obj_t *status_label(lv_obj_t *scr, uint32_t color)
+{
+    lv_obj_t *l = label(scr, "", &inter_16_semibold, color);
+    lv_obj_set_width(l, W / 2 - MODE_BTN_W / 2 - 2 * PAD);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
+    lv_obj_align(l, LV_ALIGN_BOTTOM_LEFT, PAD, -8);
+    return l;
+}
+
+static void mode_cb(lv_event_t *e);
+
+/* Day screen: a moon (go to night); night screen: a sun (go to day) */
+static void mode_button(lv_obj_t *scr, bool night)
+{
+    lv_obj_t *b = plain_obj(scr);
+    lv_obj_set_size(b, MODE_BTN_W, MODE_BTN_H);
+    lv_obj_align(b, LV_ALIGN_BOTTOM_MID, 0, -2);
+    lv_obj_set_style_radius(b, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(night ? NIGHT_BG : BUTTON_BG), 0);
+    lv_obj_set_style_bg_color(b, lv_color_hex(night ? NIGHT_FILL_HI : TILE_BORDER), LV_STATE_PRESSED);
+    lv_obj_set_style_border_width(b, 1, 0);
+    lv_obj_set_style_border_color(b, lv_color_hex(night ? NIGHT_EDGE : TILE_BORDER), 0);
+    lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(b, mode_cb, LV_EVENT_SHORT_CLICKED, NULL);
+    lv_obj_t *icon = lv_image_create(b);
+    lv_image_set_src(icon, night ? &icon_mode_sun : &icon_mode_moon);
+    lv_obj_set_style_image_recolor_opa(icon, LV_OPA_COVER, 0);
+    lv_obj_set_style_image_recolor(icon, lv_color_hex(night ? NIGHT_DIM : DATE_COLOR), 0);
+    lv_obj_center(icon);
+}
+
+/* ---- night screen: red on black, three full-height tiles ---- */
+
+static lv_obj_t *night_tile(lv_obj_t *parent, int col, const char *title)
+{
+    lv_obj_t *t = plain_obj(parent);
+    lv_obj_set_pos(t, COL_X(col), TOP);
+    lv_obj_set_size(t, COL_W, BOTTOM - TOP);
+    lv_obj_set_style_radius(t, 16, 0);
+    lv_obj_set_style_bg_opa(t, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(t, lv_color_hex(NIGHT_BG), 0);
+    lv_obj_set_style_border_width(t, 1, 0);
+    lv_obj_set_style_border_color(t, lv_color_hex(NIGHT_EDGE), 0);
+    lv_obj_set_style_pad_all(t, 12, 0);
+    lv_obj_set_flex_flow(t, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(t, 6, 0);
+    lv_obj_remove_flag(t, LV_OBJ_FLAG_CLICKABLE);
+    if (title) {
+        label(t, title, &inter_16_bold, NIGHT_DIM);
+    }
+    return t;
+}
+
+/* Under the next dose: "Snooze 15 min · 3 left", or "Quiet until 2215 · 3 left" while snoozed */
+static void build_night_snooze(lv_obj_t *parent)
+{
+    uint16_t code = s_view.doses.snooze;
+    int until = DOSE_SNOOZE_UNTIL(code), left = DOSE_SNOOZE_LEFT(code);
+    char text[48];
+    if (until >= 0) {
+        snprintf(text, sizeof(text), "Quiet until %02d%02d  ·  %d left", until / 60, until % 60, left);
+        label(parent, text, &inter_16_semibold, NIGHT_DIM);
+        return;
+    }
+    lv_obj_t *btn = plain_obj(parent);
+    lv_obj_set_size(btn, LV_PCT(100), 56);
+    lv_obj_set_style_radius(btn, 10, 0);
+    lv_obj_set_style_border_width(btn, 2, 0);
+    lv_obj_set_style_border_color(btn, lv_color_hex(NIGHT_RED), 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(NIGHT_BG), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(NIGHT_FILL_HI), LV_STATE_PRESSED);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn, snooze_tap_cb, LV_EVENT_SHORT_CLICKED, NULL);
+    snprintf(text, sizeof(text), "Snooze %d min  ·  %d left", DOSE_SNOOZE_MIN, left);
+    s_night_snooze_label = label(btn, s_snoozing ? "Snoozing..." : text, &inter_16_bold, NIGHT_RED);
+    lv_obj_center(s_night_snooze_label);
+}
+
+static void build_night_done(lv_obj_t *col)
+{
+    if (!s_view.have_doses) {
+        label(col, "Waiting for the doses...", &inter_16_semibold, NIGHT_DIM);
+        return;
+    }
+    bool any = today_list((int[DOSE_MAX]){0}) > 0;
+    label(col, "✓", &inter_48_bold, NIGHT_RED);
+    label(col, any ? "All done today" : "No doses today", &inter_23_semibold, NIGHT_RED);
+    if (!clock_ok()) {
+        return;
+    }
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    /* After midnight "tomorrow" is today */
+    int wday = tm.tm_hour * 60 + tm.tm_min < NIGHT_END ? tm.tm_wday : (tm.tm_wday + 1) % 7;
+    for (int i = 0; i < s_view.doses.count; i++) {
+        if (due_today(&s_view.doses.defs[i], wday)) {
+            char text[48], t[8];
+            fmt_time(s_view.doses.defs[i].minute, t, sizeof(t));
+            snprintf(text, sizeof(text), "Next: %s %s", t, s_view.doses.defs[i].name);
+            lv_obj_t *l = label(col, text, &inter_16_semibold, NIGHT_DIM);
+            lv_obj_set_width(l, LV_PCT(100));
+            break;
+        }
+    }
+}
+
+/* Left tile: the next dose, a stripe in its color down the left edge; tap to take it */
+static void build_night_dose(void)
+{
+    lv_obj_clean(s_night_dose_area);
+    s_night_hint = NULL;
+    s_night_snooze_label = NULL;
+    lv_obj_t *t = night_tile(s_night_dose_area, 0, NULL);
+    lv_obj_set_style_pad_all(t, 0, 0);
+    lv_obj_set_flex_flow(t, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_clip_corner(t, true, 0);
+    lv_obj_set_style_border_post(t, true, 0); /* over the stripe */
+    int i = s_next;
+    if (i >= 0) {
+        lv_obj_t *stripe = plain_obj(t);
+        lv_obj_set_size(stripe, NIGHT_STRIPE_W, LV_PCT(100));
+        lv_obj_set_style_bg_opa(stripe, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(stripe, lv_color_hex(dose_color(i)), 0);
+        lv_obj_remove_flag(stripe, LV_OBJ_FLAG_CLICKABLE);
+    }
+    lv_obj_t *col = plain_obj(t);
+    lv_obj_set_height(col, LV_PCT(100));
+    lv_obj_set_flex_grow(col, 1);
+    lv_obj_set_style_pad_all(col, 14, 0);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(col, 8, 0);
+    lv_obj_remove_flag(col, LV_OBJ_FLAG_CLICKABLE); /* taps go to the tile */
+    bool overdue = i >= 0 && s_states[i] == DOSE_OVERDUE;
+    label(col, overdue ? "OVERDUE" : "NEXT DOSE", &inter_16_bold, NIGHT_DIM);
+    if (i < 0) {
+        build_night_done(col);
+        return;
+    }
+    const dose_def_t *d = &s_view.doses.defs[i];
+    if (overdue) {
+        pulse_border(t, 4, NIGHT_RED);
+    }
+    lv_obj_add_flag(t, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_color(t, lv_color_hex(NIGHT_FILL), LV_STATE_PRESSED);
+    lv_obj_add_event_cb(t, card_tap_cb, LV_EVENT_SHORT_CLICKED, (void *)(intptr_t)i);
+
+    char text[24];
+    fmt_time(d->minute, text, sizeof(text));
+    label(col, text, &inter_48_bold, NIGHT_RED);
+    lv_obj_t *name = label(col, d->name, &inter_30_semibold, NIGHT_RED);
+    lv_obj_set_width(name, LV_PCT(100));
+    lv_obj_set_height(name, lv_font_get_line_height(&inter_30_semibold));
+    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
+    if (overdue) {
+        lv_obj_t *badge = plain_obj(col);
+        lv_obj_set_size(badge, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+        lv_obj_set_style_radius(badge, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_border_width(badge, 2, 0);
+        lv_obj_set_style_border_color(badge, lv_color_hex(NIGHT_RED), 0);
+        lv_obj_set_style_pad_hor(badge, 12, 0);
+        lv_obj_set_style_pad_ver(badge, 2, 0);
+        lv_obj_remove_flag(badge, LV_OBJ_FLAG_CLICKABLE);
+        int late = late_min(i);
+        if (late < 60) {
+            snprintf(text, sizeof(text), "Late %d min", late);
+        } else {
+            snprintf(text, sizeof(text), "Late %dh %02dm", late / 60, late % 60);
+        }
+        label(badge, text, &inter_23_semibold, NIGHT_RED);
+    }
+    lv_obj_t *gap = plain_obj(col); /* the rest goes to the bottom */
+    lv_obj_set_width(gap, LV_PCT(100));
+    lv_obj_set_flex_grow(gap, 1);
+    lv_obj_remove_flag(gap, LV_OBJ_FLAG_CLICKABLE);
+    s_night_hint = label(col, s_taking_uid ? "Taking..." : "Tap when taken", &inter_16_semibold, NIGHT_DIM);
+    if (snooze_wanted()) {
+        build_night_snooze(col);
+    }
+}
+
+static void build_night_screen(void)
+{
+    s_night = lv_obj_create(NULL);
+    lv_obj_remove_flag(s_night, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_bg_color(s_night, lv_color_hex(NIGHT_BG), 0);
+    lv_obj_set_style_bg_opa(s_night, LV_OPA_COVER, 0);
+    lv_obj_t *banner = plain_obj(s_night);
+    lv_obj_set_size(banner, W, BANNER_H);
+    lv_obj_set_flex_flow(banner, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(banner, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(banner, 12, 0);
+    lv_obj_remove_flag(banner, LV_OBJ_FLAG_CLICKABLE);
+    s_ndate_label = label(banner, "", &inter_30_semibold, NIGHT_DIM);
+    s_ntime_label = label(banner, "", &inter_30_semibold, NIGHT_RED);
+    s_night_dose_area = plain_obj(s_night);
+    lv_obj_set_size(s_night_dose_area, W, H);
+    lv_obj_remove_flag(s_night_dose_area, LV_OBJ_FLAG_CLICKABLE);
+    build_calendar(night_tile(s_night, 1, "CALENDAR"), &s_ncal, true);
+    build_weather(night_tile(s_night, 2, "WEATHER"), &s_nwx, true);
+    s_nstatus_label = status_label(s_night, NIGHT_RED);
+    mode_button(s_night, true);
 }
 
 static void rebuild_doses(void)
@@ -1078,6 +1379,7 @@ static void rebuild_doses(void)
     s_snooze_label = NULL;
     build_list(s_dose_area);
     build_card(s_dose_area);
+    build_night_dose();
 }
 
 /* What the dose area depends on: rebuild only when it changes */
@@ -1197,10 +1499,165 @@ static void build_schedule_screen(void)
 
 /* ---- boot splash ---- */
 
+/* ---- night mode: which screen, backlight, screen off ---- */
+
+static bool s_splash_done, s_night_mode, s_off, s_flash;
+static uint32_t s_awake_tick; /* last wake, or the last tick something needed the screen */
+static int s_bl = -1;
+/* The mode button: night by day (until s_ovr_until, the next NIGHT_END), or day by night */
+static enum { OVR_NONE, OVR_NIGHT, OVR_DAY } s_ovr;
+static time_t s_ovr_until;
+
+static void backlight(int percent)
+{
+    if (percent != s_bl) {
+        s_bl = percent;
+        board_backlight(percent);
+    }
+}
+
+static bool night_now(void)
+{
+#if NIGHT_TEST
+    return true;
+#else
+    if (!clock_ok()) {
+        return false;
+    }
+    time_t now = time(NULL);
+    struct tm tm;
+    localtime_r(&now, &tm);
+    int m = tm.tm_hour * 60 + tm.tm_min;
+    return m >= NIGHT_START || m < NIGHT_END;
+#endif
+}
+
+/* -1: nothing overdue, or snoozed (the screen may go off); else snoozes used so far (0 ...
+ * DOSE_SNOOZE_MAX; DOSE_SNOOZE_MAX = all used, the last stage) */
+static int night_stage(void)
+{
+    if (s_next < 0 || s_states[s_next] != DOSE_OVERDUE) {
+        return -1;
+    }
+    uint16_t code = s_view.doses.snooze;
+    if (DOSE_SNOOZE_UNTIL(code) >= 0) {
+        return -1;
+    }
+    int used = DOSE_SNOOZE_MAX - DOSE_SNOOZE_LEFT(code);
+    return used < 0 ? 0 : used > DOSE_SNOOZE_MAX ? DOSE_SNOOZE_MAX : used;
+}
+
+static void set_off(bool off)
+{
+    if (off == s_off) {
+        if (!off) {
+            s_awake_tick = lv_tick_get();
+        }
+        return;
+    }
+    s_off = off;
+    ESP_LOGI(TAG, "screen %s", off ? "off" : "on");
+    if (off) {
+        lv_obj_remove_flag(s_shield, LV_OBJ_FLAG_HIDDEN);
+        backlight(0);
+    } else {
+        lv_obj_add_flag(s_shield, LV_OBJ_FLAG_HIDDEN);
+        s_awake_tick = lv_tick_get();
+    }
+}
+
+/* The screen is off: the first touch only wakes it */
+static void shield_cb(lv_event_t *e)
+{
+    (void)e;
+    set_off(false);
+    backlight(NIGHT_PCT);
+}
+
+/* The clock's mode, unless the button overrides it (and the override still holds) */
+static bool want_night(int stage)
+{
+    bool clock_night = night_now();
+    if (s_ovr == OVR_NIGHT && (clock_night || (clock_ok() && time(NULL) >= s_ovr_until))) {
+        s_ovr = OVR_NONE; /* the clock agrees now, or the night is over */
+    } else if (s_ovr == OVR_DAY &&
+               (!clock_night || stage >= 0 || lv_display_get_inactive_time(NULL) > DAY_AT_NIGHT_MS)) {
+        s_ovr = OVR_NONE; /* morning, an overdue dose, or left alone */
+    }
+    return s_ovr == OVR_NIGHT ? true : s_ovr == OVR_DAY ? false : clock_night;
+}
+
+/* Every tick (1 s), and after the mode button */
+static void power_update(void)
+{
+    if (!s_splash_done) {
+        return;
+    }
+    int stage = night_stage();
+    bool night = want_night(stage);
+    if (night != s_night_mode) {
+        s_night_mode = night;
+        ESP_LOGI(TAG, "%s mode%s", night ? "night" : "day", s_ovr != OVR_NONE ? " (button)" : "");
+        confirm_close();
+        lv_screen_load(night ? s_night : s_home);
+        set_off(false);
+    }
+    if (!night) {
+        backlight(s_ovr == OVR_DAY ? DAY_AT_NIGHT_PCT : DAY_PCT);
+        return;
+    }
+    if (stage >= 0 || s_timer_done) {
+        set_off(false); /* stays on; off NIGHT_WAKE_MS after this ends (and no touch) */
+    } else if (!s_off && lv_display_get_inactive_time(NULL) > NIGHT_WAKE_MS &&
+               lv_tick_elaps(s_awake_tick) > NIGHT_WAKE_MS) {
+        set_off(true);
+    }
+    if (s_off) {
+        return;
+    }
+    if (stage == DOSE_SNOOZE_MAX) {
+        s_flash = !s_flash;
+        backlight(s_flash ? FLASH_HI_PCT : FLASH_LO_PCT);
+    } else {
+        backlight(stage >= 0 ? NIGHT_STAGE_PCT[stage] : NIGHT_PCT);
+    }
+}
+
+static void mode_cb(lv_event_t *e)
+{
+    (void)e;
+    bool clock_night = night_now();
+    if (s_night_mode) {
+        s_ovr = clock_night ? OVR_DAY : OVR_NONE;
+    } else if (clock_night) {
+        s_ovr = OVR_NONE; /* back from the day screen at night */
+    } else {
+        s_ovr = OVR_NIGHT;
+        time_t now = time(NULL);
+        struct tm tm;
+        localtime_r(&now, &tm);
+        tm.tm_hour = NIGHT_END / 60;
+        tm.tm_min = NIGHT_END % 60;
+        tm.tm_sec = 0;
+        tm.tm_isdst = -1;
+        s_ovr_until = mktime(&tm);
+        if (s_ovr_until <= now) {
+            tm.tm_mday++; /* mktime normalizes */
+            tm.tm_isdst = -1;
+            s_ovr_until = mktime(&tm);
+        }
+    }
+    power_update();
+}
+
 static void splash_done_cb(lv_timer_t *t)
 {
     (void)t;
-    lv_screen_load_anim(s_home, LV_SCREEN_LOAD_ANIM_FADE_IN, 300, 0, true);
+    s_splash_done = true;
+    s_night_mode = night_now();
+    s_awake_tick = lv_tick_get();
+    lv_screen_load_anim(s_night_mode ? s_night : s_home, LV_SCREEN_LOAD_ANIM_FADE_IN, 300, 0, true);
+    power_update();
 }
 
 static void show_splash(void)
@@ -1269,19 +1726,26 @@ static void tick_cb(lv_timer_t *t)
         static const char *const days[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
         static const char *const months[] = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN",
                                              "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"};
-        lv_label_set_text_fmt(s_date_label, "%s %d %s  ·", days[tm.tm_wday], tm.tm_mday, months[tm.tm_mon]);
-        lv_label_set_text_fmt(s_time_label, "%02d%02d hrs", tm.tm_hour, tm.tm_min);
+        char date[24], hm[16];
+        snprintf(date, sizeof(date), "%s %d %s  ·", days[tm.tm_wday], tm.tm_mday, months[tm.tm_mon]);
+        snprintf(hm, sizeof(hm), "%02d%02d hrs", tm.tm_hour, tm.tm_min);
+        set_text(s_date_label, date);
+        set_text(s_time_label, hm);
+        set_text(s_ndate_label, date);
+        set_text(s_ntime_label, hm);
     }
 
     const char *problem = NULL;
     if (!s_view.up) {
         problem = "Dashboard node not answering";
     } else if (!(s_view.status.flags & LINK_FLAG_MAIN_CONNECTED)) {
-        problem = "Main unit not connected: doses may be out of date";
+        problem = "Main unit offline: doses may be stale";
     }
-    lv_label_set_text(s_status_label, problem ? problem : "");
+    set_text(s_status_label, problem ? problem : "");
+    set_text(s_nstatus_label, problem ? problem : "");
     update_weather();
-    update_calendar();
+    update_calendars();
+    power_update();
 }
 
 void ui_start(void)
@@ -1306,14 +1770,22 @@ void ui_start(void)
     lv_obj_remove_flag(s_dose_area, LV_OBJ_FLAG_CLICKABLE);
     build_tiles(scr);
 
-    s_status_label = label(scr, "", &inter_16_semibold, OVERDUE_RED);
-    lv_obj_align(s_status_label, LV_ALIGN_BOTTOM_MID, 0, -8);
+    s_status_label = status_label(scr, OVERDUE_RED);
+    mode_button(scr, false);
 
     /* Long press = hold to undo: 1 s, as on the C5 (only taken rows listen for it) */
     for (lv_indev_t *in = lv_indev_get_next(NULL); in; in = lv_indev_get_next(in)) {
         lv_indev_set_long_press_time(in, HOLD_UNDO_MS);
     }
     build_schedule_screen();
+    build_night_screen();
+    /* Over everything while the night screen is off: swallows the waking touch */
+    s_shield = plain_obj(lv_layer_top());
+    lv_obj_set_size(s_shield, W, H);
+    lv_obj_set_style_bg_opa(s_shield, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_shield, lv_color_black(), 0);
+    lv_obj_add_flag(s_shield, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_shield, shield_cb, LV_EVENT_PRESSED, NULL);
     show_splash();
     lv_timer_create(tick_cb, 1000, NULL);
     tick_cb(NULL);
