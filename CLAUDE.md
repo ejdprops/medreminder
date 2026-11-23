@@ -503,9 +503,10 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       (`doses.c`), ~2 s round trip. No undo on the node (C5 or dashboard). Logging over USB
       while moving the node gets cut off (the host re-enumerates, the node restarts): test
       handling on a charger and watch for "Taking..." instead.
-    - TAKE carries an undo flag (`TAKE_UNDO` 0x100 in the CRC field, uid in bits 0-7;
-      `node_sync_request_take(uid, take)` / `node_sync_next_take(&uid, &take)`): used by the
-      dashboard. An older C5 would read an undo as a take: flash the C5 first.
+    - TAKE carries flags in the CRC field (uid in bits 0-7): `TAKE_UNDO` 0x100 (dashboard undo),
+      `TAKE_SNOOZE` 0x200 (uid 0; see 7h step 9). API: `node_sync_request(uid, NODE_REQ_TAKE /
+      _UNDO / _SNOOZE)` on a node, `node_sync_next_request(&uid, &req)` on the C5. An older C5
+      would read an undo as a take: flash the C5 first.
     - Battery: the board has a LiPo charger (GPIO23 status, GPIO0 divider), but as a Thread router
       with the radio always on it would last well under a day. Weeks would need a sleepy end
       device (Matter ICD), the screen mostly off (wake on tap / dose due) and polling sync.
@@ -519,7 +520,8 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       pull-up and UART TX+RX routed onto the one pad (each side hears and drops its own bytes).
       The panel polls every 200 ms, the node only answers. Frame: 0xA5, type, length u16 LE,
       payload, CRC32 LE (`esp_rom_crc32_le` over type+length+payload). POLL (u32 CRC the panel
-      holds), TAKE (CRC + u8 uid, sent on via `node_sync_request_take`), REPLY (time UTC (0 =
+      holds), TAKE (CRC + u8 uid, sent on via `node_sync_request`), UNTAKE (0x03), SNOOZE (0x04,
+      CRC only), REPLY (time UTC (0 =
       not set), flags bit0 = C5 connected, CRC; plus the `doses_snapshot_t` when the panel's CRC
       differs). Tested: 326/326 polls OK; BOOT on the panel took Karen 1330 on the C5, new state
       back on the panel in ~2.2 s.
@@ -601,6 +603,22 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       then "MON 23 NOV"), events as chips (filled = timed with HHMM, outlined = all day or a
       timed event continuing from an earlier day), as many as fit (~10 rows); today's timed
       events drop off when over. To inspect the feed, print counts/shapes only (it's private).
+    - Step 9 (done, tested) overdue snooze, all units (`doses_snooze` in `main/doses.c`; the C5
+      decides). An overdue dose can be snoozed `DOSE_SNOOZE_MIN` (15) min, at most
+      `DOSE_SNOOZE_MAX` (4) times per overdue spell (until nothing is overdue; midnight resets).
+      While snoozed: no chime; one snooze at a time; a dose newly overdue ends it. When it ends:
+      the chime plays (5 min repeat resumes) and `matter_dev_renotify()` closes the "Dose overdue"
+      sensor for 3 s and reopens it, so Home notifies again. `DOSE_TEST`: 2 min snooze.
+      - Snapshot: the former `reserved[2]` is `snooze` (`DOSE_SNOOZE_CODE`: bits 0-10 end minute
+        of the day + 1, 0 = not snoozed; bits 12-14 snoozes left). An older C5 sends 0: no
+        snooze offered.
+      - C5 home: an inverted strip under the overdue card (where Undo goes; Undo wins): "N snoozes
+        left" + blue "Snooze 15 min" button, or "Quiet until HHMM" while snoozed.
+      - Dashboard: the same strip under the next-dose card ("Quiet until HHMM · N left"); tap ->
+        SNOOZE over the link -> XIAO -> TAKE_SNOOZE to the C5; "Snoozing..." until the new state
+        or 10 s.
+      - Round node: can't snooze (no touch); while snoozed, "Late N min" alternates with "Quiet
+        until HHMM" every 3 s.
     - The panel logs each dose's time and palette index when a new dose state arrives
       (`link:   1900 color 0`), for matching colors.
     - Next: speaker (audio.c like the C5's: timer chime, overdue chime on the dashboard and
