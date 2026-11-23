@@ -88,6 +88,17 @@ void doses_set_overdue_min(int minutes);
 /* A dose due today has reached its time and isn't taken (the screen stays awake for it) */
 bool doses_any_due(time_t now);
 
+/* Snooze the overdue chime (main unit; nodes ask it with node_sync_request): quiet for
+ * DOSE_SNOOZE_MIN, then the chime and the 5 min repeat resume and Home notifies again. At most
+ * DOSE_SNOOZE_MAX per overdue spell (until nothing is overdue). A dose newly overdue during a
+ * snooze ends it. False if nothing is overdue, a snooze is running or none are left. */
+#define DOSE_SNOOZE_MIN 15
+#define DOSE_SNOOZE_MAX 4
+bool doses_snooze(time_t now);
+/* Snooze as every unit sees it: minute of the day it ends (-1: not snoozed), snoozes left */
+int doses_snooze_until(void);
+int doses_snoozes_left(void);
+
 /* Node sync (node_sync.c): what a node mirrors from the main unit. Sent as raw bytes up to
  * defs[count] (both ends run this firmware); unused defs are zero. */
 typedef struct {
@@ -95,10 +106,15 @@ typedef struct {
     uint32_t taken;  /* bit i: defs[i] taken */
     uint8_t count;
     uint8_t overdue_min;
-    uint8_t reserved[2];
+    uint16_t snooze; /* DOSE_SNOOZE_CODE (was reserved, 0 from older main units: no snooze offered) */
     dose_def_t defs[DOSE_MAX];
 } doses_snapshot_t;
 #define DOSES_SNAPSHOT_LEN(count) (offsetof(doses_snapshot_t, defs) + (count) * sizeof(dose_def_t))
+/* snooze: bits 0-10 the minute of the day it ends + 1 (0 = not snoozed), bits 12-14 snoozes left */
+#define DOSE_SNOOZE_CODE(until_min, left) \
+    ((uint16_t)(((until_min) < 0 ? 0 : ((until_min) % 1440) + 1) | ((left) & 7) << 12))
+#define DOSE_SNOOZE_UNTIL(code) ((int)((code) & 0x7ff) - 1)
+#define DOSE_SNOOZE_LEFT(code) ((int)((code) >> 12) & 7)
 
 void doses_get_snapshot(doses_snapshot_t *s);
 /* Node: replace the schedule, taken flags and overdue setting with the main unit's (saved) */

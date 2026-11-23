@@ -131,7 +131,10 @@ static void build_ring(lv_obj_t *scr, uint32_t color, bool blink)
     }
 }
 
-/* "in 25 min", "in 2h 05m", "Due now", "Late 42 min" for the middle dose */
+/* "in 25 min", "in 2h 05m", "Due now", "Late 42 min" for the middle dose; while the C5's snooze
+ * runs, "Late 42 min" takes turns with "Quiet until 2251" (QUIET_FLIP_S each; the node can't
+ * snooze: no touch, no exposed button) */
+#define QUIET_FLIP_S 3
 static void update_when_label(void)
 {
     if (!s_when_label || s_next < 0) {
@@ -148,7 +151,10 @@ static void update_when_label(void)
     bool late = diff < 0;
     int m = late ? -diff : diff;
     char buf[24];
-    if (dose_state(s_next) == DOSE_OVERDUE) {
+    int quiet = doses_snooze_until();
+    if (dose_state(s_next) == DOSE_OVERDUE && quiet >= 0 && (now / QUIET_FLIP_S) % 2) {
+        snprintf(buf, sizeof(buf), "Quiet until %02d%02d", quiet / 60, quiet % 60);
+    } else if (dose_state(s_next) == DOSE_OVERDUE) {
         if (m < 60) {
             snprintf(buf, sizeof(buf), "Late %d min", m);
         } else {
@@ -381,7 +387,7 @@ static void on_shake(void)
         return;
     }
     ESP_LOGI(TAG, "shake: taking %s", dose_name(s_next));
-    node_sync_request_take(dose_def(s_next)->uid, true);
+    node_sync_request(dose_def(s_next)->uid, NODE_REQ_TAKE);
     if (s_when_label) {
         lv_label_set_text(s_when_label, "Taking...");
     }
@@ -404,6 +410,11 @@ static void tick_cb(lv_timer_t *t)
     }
     if (!s_time_label || !time_is_valid()) {
         return;
+    }
+    static time_t flip;
+    if (doses_snooze_until() >= 0 && now / QUIET_FLIP_S != flip) {
+        flip = now / QUIET_FLIP_S;
+        update_when_label(); /* one small label every few seconds: fine for the CHIP task */
     }
     struct tm tm;
     localtime_r(&now, &tm);

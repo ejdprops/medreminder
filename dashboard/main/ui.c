@@ -88,6 +88,10 @@ static const char *TAG = "ui";
 #define OVERDUE_RED 0xef4444
 #define LATE_TEXT 0xb91c1c
 #define TAKE_TIMEOUT_MS 10000
+#define SNOOZE_H 48 /* the snooze strip under an overdue card */
+#define SNOOZE_GAP 6
+#define SNOOZE_BLUE 0x93c5fd /* as on the C5 */
+#define SNOOZE_BLUE_TEXT 0x111827
 #define HOLD_UNDO_MS 1000
 #define SPLASH_MS 5000
 #define SPLASH_BG 0x0b0d14 /* the logo's background */
@@ -107,6 +111,9 @@ static int s_next = -1;
 static uint32_t s_shown_sig; /* what the dose area shows; rebuilt when it changes */
 static uint8_t s_taking_uid;  /* tapped, waiting for the C5's new state */
 static uint32_t s_taking_since;
+static bool s_snoozing; /* tapped Snooze, waiting for the C5's new state */
+static uint32_t s_snoozing_since;
+static lv_obj_t *s_snooze_label;
 static lv_obj_t *s_confirm; /* undo dialog, on the top layer */
 static uint8_t s_confirm_uid;
 
@@ -438,11 +445,77 @@ static void build_done_card(lv_obj_t *card)
     }
 }
 
+/* ---- snooze (the C5 decides; its state says until when and how many are left) ---- */
+
+static bool snooze_wanted(void)
+{
+    uint16_t code = s_view.doses.snooze;
+    return s_next >= 0 && s_states[s_next] == DOSE_OVERDUE &&
+           (DOSE_SNOOZE_UNTIL(code) >= 0 || DOSE_SNOOZE_LEFT(code) > 0);
+}
+
+static void snooze_tap_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_snoozing || !s_view.up) {
+        return;
+    }
+    ESP_LOGI(TAG, "snooze");
+    s_snoozing = true;
+    s_snoozing_since = lv_tick_get();
+    link_snooze();
+    if (s_snooze_label) {
+        lv_label_set_text(s_snooze_label, "Snoozing...");
+    }
+}
+
+static void build_snooze_strip(lv_obj_t *area)
+{
+    uint16_t code = s_view.doses.snooze;
+    int until = DOSE_SNOOZE_UNTIL(code), left = DOSE_SNOOZE_LEFT(code);
+    lv_obj_t *strip = plain_obj(area);
+    lv_obj_set_pos(strip, CARD_X, CARD_Y + CARD_H - SNOOZE_H);
+    lv_obj_set_size(strip, CARD_W, SNOOZE_H);
+    lv_obj_set_style_radius(strip, 12, 0);
+    lv_obj_set_style_bg_opa(strip, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(strip, lv_color_hex(TILE_BG), 0);
+    lv_obj_set_style_border_width(strip, 1, 0);
+    lv_obj_set_style_border_color(strip, lv_color_hex(TILE_BORDER), 0);
+    lv_obj_set_style_pad_all(strip, 6, 0);
+    lv_obj_set_style_pad_left(strip, 12, 0);
+    lv_obj_set_flex_flow(strip, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(strip, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(strip, 10, 0);
+    char text[40];
+    s_snooze_label = NULL;
+    if (until >= 0) {
+        /* Snoozed: no button until it ends (one at a time) */
+        snprintf(text, sizeof(text), "Quiet until %02d%02d  \u00b7  %d left", until / 60, until % 60, left);
+        label(strip, text, &inter_16_semibold, TEXT);
+        return;
+    }
+    snprintf(text, sizeof(text), "%d left", left);
+    label(strip, text, &inter_16_semibold, MUTED);
+    lv_obj_t *btn = plain_obj(strip);
+    lv_obj_set_height(btn, LV_PCT(100));
+    lv_obj_set_flex_grow(btn, 1);
+    lv_obj_set_style_radius(btn, 8, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(SNOOZE_BLUE), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_darken(lv_color_hex(SNOOZE_BLUE), LV_OPA_20), LV_STATE_PRESSED);
+    lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(btn, snooze_tap_cb, LV_EVENT_SHORT_CLICKED, NULL);
+    snprintf(text, sizeof(text), "Snooze %d min", DOSE_SNOOZE_MIN);
+    s_snooze_label = label(btn, s_snoozing ? "Snoozing..." : text, &inter_16_semibold, SNOOZE_BLUE_TEXT);
+    lv_obj_center(s_snooze_label);
+}
+
 static void build_card(lv_obj_t *area)
 {
+    bool strip = snooze_wanted();
     lv_obj_t *card = plain_obj(area);
     lv_obj_set_pos(card, CARD_X, CARD_Y);
-    lv_obj_set_size(card, CARD_W, CARD_H);
+    lv_obj_set_size(card, CARD_W, strip ? CARD_H - SNOOZE_H - SNOOZE_GAP : CARD_H);
     lv_obj_set_style_radius(card, 16, 0);
     lv_obj_set_style_bg_opa(card, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_all(card, 14, 0);
@@ -498,6 +571,10 @@ static void build_card(lv_obj_t *area)
             snprintf(text, sizeof(text), "Late %dh %02dm", late / 60, late % 60);
         }
         label(badge, text, &inter_16_bold, LATE_TEXT);
+    }
+    if (strip) {
+        build_snooze_strip(area); /* no room for the hint: the card is still the tap target */
+        return;
     }
     s_card_hint = label(card, s_taking_uid ? "Taking..." : "Tap when taken", &inter_16_semibold, fg);
     lv_obj_set_width(s_card_hint, LV_PCT(100));
@@ -998,6 +1075,7 @@ static void build_tiles(lv_obj_t *scr)
 static void rebuild_doses(void)
 {
     lv_obj_clean(s_dose_area);
+    s_snooze_label = NULL;
     build_list(s_dose_area);
     build_card(s_dose_area);
 }
@@ -1152,11 +1230,22 @@ static void tick_cb(lv_timer_t *t)
         }
     }
     if (changed) {
-        s_taking_uid = 0; /* a new state: the take went through (or something else changed) */
-    } else if (s_taking_uid && lv_tick_elaps(s_taking_since) > TAKE_TIMEOUT_MS) {
-        ESP_LOGW(TAG, "take of uid %u: no new state in %d s", s_taking_uid, TAKE_TIMEOUT_MS / 1000);
+        /* A new state: the take or snooze went through (or something else changed) */
         s_taking_uid = 0;
-        changed = true; /* back to "Tap when taken" */
+        s_snoozing = false;
+    } else {
+        bool timed_out = false;
+        if (s_taking_uid && lv_tick_elaps(s_taking_since) > TAKE_TIMEOUT_MS) {
+            ESP_LOGW(TAG, "take of uid %u: no new state in %d s", s_taking_uid, TAKE_TIMEOUT_MS / 1000);
+            s_taking_uid = 0;
+            timed_out = true;
+        }
+        if (s_snoozing && lv_tick_elaps(s_snoozing_since) > TAKE_TIMEOUT_MS) {
+            ESP_LOGW(TAG, "snooze: no new state in %d s", TAKE_TIMEOUT_MS / 1000);
+            s_snoozing = false;
+            timed_out = true;
+        }
+        changed = timed_out; /* back to "Tap when taken" / "Snooze 15 min" */
     }
     compute_states();
     if (lv_screen_active() == s_sched) {

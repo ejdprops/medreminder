@@ -37,6 +37,9 @@ typedef struct {
 /* From the UI task (doses.c): the doses Home should show and whether any is overdue. Cheap when
  * nothing changed; endpoint changes happen on the matter_dev task. */
 void matter_dev_publish(const matter_dose_t *doses, int count, bool overdue);
+/* From the UI task: a snooze ended with a dose still overdue. The "Dose overdue" sensor closes for
+ * RENOTIFY_MS and opens again, so Home sends another notification. */
+void matter_dev_renotify(void);
 
 /* From the UI task: next take (on) / undo (off) request from Home; false when there is none */
 bool matter_dev_next_request(uint8_t *uid, bool *on);

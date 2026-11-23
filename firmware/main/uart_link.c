@@ -7,8 +7,9 @@
  * CRC32 (LE, esp_rom_crc32_le over type, length and payload).
  *   POLL  panel -> node, every ~200 ms: u32 CRC of the dose state the panel holds (0: none).
  *   TAKE  panel -> node: u32 CRC as in POLL, u8 dose uid. Sent on to the main unit like a double
- *         tap on a round node (node_sync_request_take); the new state comes back in later replies.
+ *         tap on a round node (node_sync_request); the new state comes back in later replies.
  *   UNTAKE panel -> node: as TAKE, undoes it.
+ *   SNOOZE panel -> node: (u32 CRC) snooze the overdue chime, sent on to the main unit.
  *   REPLY node -> panel, to both: link_status_t, then the doses_snapshot_t (up to defs[count]) when
  *         the panel's CRC differs from this node's.
  * The panel has no network: its clock comes from REPLY (UTC seconds; it applies the same TZ). */
@@ -149,7 +150,10 @@ static void task(void *arg)
         if ((type == LINK_MSG_TAKE || type == LINK_MSG_UNTAKE) && len >= 5) {
             bool take = type == LINK_MSG_TAKE;
             ESP_LOGI(TAG, "panel %s dose %u", take ? "takes" : "undoes", p[4]);
-            node_sync_request_take(p[4], take);
+            node_sync_request(p[4], take ? NODE_REQ_TAKE : NODE_REQ_UNDO);
+        } else if (type == LINK_MSG_SNOOZE) {
+            ESP_LOGI(TAG, "panel snoozes");
+            node_sync_request(0, NODE_REQ_SNOOZE);
         } else if (type != LINK_MSG_POLL) {
             ESP_LOGW(TAG, "unknown frame 0x%02x", type);
             continue;

@@ -29,6 +29,7 @@ static link_view_t s_view;
 static bool s_doses_changed;
 static uint8_t s_take_uid; /* 0 = none */
 static bool s_take_undo;
+static bool s_snooze;
 static int64_t s_last_ok_ms;
 static uint8_t s_buf[LINK_HDR_LEN + sizeof(link_status_t) + sizeof(doses_snapshot_t) + LINK_CRC_LEN];
 
@@ -98,9 +99,14 @@ static void task(void *arg)
             s_take_uid = 0;
             type = s_take_undo ? LINK_MSG_UNTAKE : LINK_MSG_TAKE;
             n = 5;
+        } else if (s_snooze) {
+            s_snooze = false;
+            type = LINK_MSG_SNOOZE;
         }
         xSemaphoreGive(s_lock);
-        if (type != LINK_MSG_POLL) {
+        if (type == LINK_MSG_SNOOZE) {
+            ESP_LOGI(TAG, "snooze");
+        } else if (type != LINK_MSG_POLL) {
             ESP_LOGI(TAG, "%s dose uid %u", type == LINK_MSG_TAKE ? "take" : "undo", p[4]);
         }
         const char *why = "";
@@ -128,8 +134,9 @@ static void task(void *arg)
                     s_view.doses = snap;
                     s_view.have_doses = true;
                     s_doses_changed = true;
-                    ESP_LOGI(TAG, "doses: %u, date %lu, taken 0x%02lx", snap.count, (unsigned long)snap.date,
-                             (unsigned long)snap.taken);
+                    ESP_LOGI(TAG, "doses: %u, date %lu, taken 0x%02lx, snooze until %d, %d left", snap.count,
+                             (unsigned long)snap.date, (unsigned long)snap.taken, DOSE_SNOOZE_UNTIL(snap.snooze),
+                             DOSE_SNOOZE_LEFT(snap.snooze));
                     for (int i = 0; i < snap.count; i++) { /* time and palette index, for matching colors */
                         ESP_LOGI(TAG, "  %02d%02d color %u", snap.defs[i].minute / 60, snap.defs[i].minute % 60,
                                  snap.defs[i].color);
@@ -178,6 +185,13 @@ bool link_get(link_view_t *v)
     v->up = s_view.up;
     xSemaphoreGive(s_lock);
     return changed;
+}
+
+void link_snooze(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_snooze = true;
+    xSemaphoreGive(s_lock);
 }
 
 void link_take(uint8_t uid, bool take)

@@ -2,7 +2,9 @@
  * edited on the device and saved in NVS; until one is saved, the defaults below are used.
  * Taken doses are saved in NVS with the date, so a reboot doesn't forget them (or invite a
  * double dose); everything resets at midnight. A dose not taken s_overdue_min after its time
- * turns overdue (Settings > Overdue after, OVERDUE_MIN until set): the alert chime plays then and every ALERT_REPEAT_MIN until no dose is overdue. */
+ * turns overdue (Settings > Overdue after, OVERDUE_MIN until set): the alert chime plays then and every ALERT_REPEAT_MIN until no dose is overdue.
+ * A snooze (doses_snooze: the C5's card, the dashboard) silences it for SNOOZE_S, at most
+ * DOSE_SNOOZE_MAX times per overdue spell; when it ends the chime plays and Home notifies again. */
 #include "doses.h"
 
 #include <ctype.h>
@@ -26,9 +28,11 @@ static const char *TAG = "doses";
  * the first goes overdue after 1 min */
 #define OVERDUE_MIN 1
 #define ALERT_REPEAT_MIN 1
+#define SNOOZE_S (2 * 60)
 #else
 #define OVERDUE_MIN 30
 #define ALERT_REPEAT_MIN 5
+#define SNOOZE_S (DOSE_SNOOZE_MIN * 60)
 #endif
 
 #if CONFIG_MEDREMINDER_DOSE_TEST
@@ -77,6 +81,9 @@ static uint32_t s_taken;          /* bit i: dose i taken today */
 static uint32_t s_date;           /* YYYYMMDD the taken bits belong to; 0 until the clock is set */
 static dose_state_t s_states[DOSE_MAX];
 static time_t s_next_alert;       /* 0 = no alert pending */
+static time_t s_snooze_end;       /* main unit: 0 = not snoozed */
+static int s_snoozes;             /* main unit: used in this overdue spell */
+static uint16_t s_snooze_code;    /* node: as the main unit sent it */
 static uint8_t s_today = DOSE_DAILY; /* today's weekday bit; all days until the clock is set */
 static bool s_dirty;              /* changed outside doses_tick: report it on the next tick */
 static uint8_t s_uid_next = 1;    /* next uid to try */
@@ -504,6 +511,7 @@ void doses_get_snapshot(doses_snapshot_t *snap)
     snap->taken = s_taken;
     snap->count = (uint8_t)s_count;
     snap->overdue_min = (uint8_t)s_overdue_min;
+    snap->snooze = s_snooze_code;
     memcpy(snap->defs, s_defs, s_count * sizeof(dose_def_t));
 }
 
@@ -516,6 +524,7 @@ void doses_apply_snapshot(const doses_snapshot_t *snap)
     if (snap->overdue_min > 0) {
         s_overdue_min = snap->overdue_min;
     }
+    s_snooze_code = snap->snooze;
     save_schedule();
     save_taken();
     nvs_handle_t nvs;
@@ -575,11 +584,16 @@ static bool apply_home_requests(void)
             }
         }
     }
-    /* Taken or undone from a node (shake, dashboard); same rules */
-    while (node_sync_next_take(&uid, &on)) {
+    /* Taken, undone or snoozed from a node (shake, dashboard); same rules */
+    node_req_t req;
+    while (node_sync_next_request(&uid, &req)) {
+        if (req == NODE_REQ_SNOOZE) {
+            changed |= doses_snooze(time(NULL));
+            continue;
+        }
         for (int i = 0; i < s_count; i++) {
             if (s_defs[i].uid == uid && due_today(i)) {
-                changed |= on ? doses_take(i) : doses_untake(i);
+                changed |= req == NODE_REQ_TAKE ? doses_take(i) : doses_untake(i);
             }
         }
     }
@@ -595,6 +609,68 @@ static void apply_sync(void)
         doses_apply_snapshot(&snap);
     }
 #endif
+}
+
+/* ---- snooze ---- */
+
+#if !CONFIG_MEDREMINDER_ROLE_NODE
+static bool any_overdue(void)
+{
+    for (int i = 0; i < s_count; i++) {
+        if (s_states[i] == DOSE_OVERDUE) {
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
+/* Main unit: what the snapshot carries (nodes keep the main unit's) */
+static void update_snooze_code(void)
+{
+#if !CONFIG_MEDREMINDER_ROLE_NODE
+    int until = -1;
+    if (s_snooze_end) {
+        struct tm tm;
+        localtime_r(&s_snooze_end, &tm);
+        until = tm.tm_hour * 60 + tm.tm_min;
+    }
+    uint16_t code = DOSE_SNOOZE_CODE(until, DOSE_SNOOZE_MAX - s_snoozes);
+    if (code != s_snooze_code) {
+        s_snooze_code = code;
+        s_dirty = true;
+    }
+#endif
+}
+
+bool doses_snooze(time_t now)
+{
+#if CONFIG_MEDREMINDER_ROLE_NODE
+    (void)now;
+    return false;
+#else
+    /* Not while one runs: a node repeats its request until the new state arrives */
+    if (!any_overdue() || s_snooze_end || s_snoozes >= DOSE_SNOOZE_MAX) {
+        return false;
+    }
+    s_snoozes++;
+    s_snooze_end = now + SNOOZE_S;
+    s_next_alert = s_snooze_end; /* the chime comes back when it ends */
+    update_snooze_code();
+    ESP_LOGI(TAG, "snoozed until %02d%02d (%d of %d)", DOSE_SNOOZE_UNTIL(s_snooze_code) / 60,
+             DOSE_SNOOZE_UNTIL(s_snooze_code) % 60, s_snoozes, DOSE_SNOOZE_MAX);
+    return true;
+#endif
+}
+
+int doses_snooze_until(void)
+{
+    return DOSE_SNOOZE_UNTIL(s_snooze_code);
+}
+
+int doses_snoozes_left(void)
+{
+    return DOSE_SNOOZE_LEFT(s_snooze_code);
 }
 
 /* What this device holds, for node sync (the main unit sends it; a node reports it back) and a
@@ -631,30 +707,50 @@ bool doses_tick(time_t now)
         s_date = today;
         s_taken = 0;
         s_next_alert = 0;
+        s_snooze_end = 0;
+        s_snoozes = 0;
         save_taken();
     }
 
     dose_state_t before[DOSE_MAX];
     memcpy(before, s_states, sizeof(before));
     compute_states(now, true);
-    bool overdue = false;
+    bool overdue = false, newly_overdue = false;
     for (int i = 0; i < s_count; i++) {
         changed |= s_states[i] != before[i];
         if (s_states[i] == DOSE_OVERDUE) {
             overdue = true;
             if (before[i] != DOSE_OVERDUE) {
+                newly_overdue = true;
                 ESP_LOGW(TAG, "overdue: %s %s", s_defs[i].name, s_defs[i].period);
             }
         }
     }
 
-    publish();
-    publish_sync();
     if (!overdue) {
         s_next_alert = 0;
-    } else if (!s_next_alert || now >= s_next_alert) {
-        audio_play(AUDIO_ALERT);
-        s_next_alert = now + ALERT_REPEAT_MIN * 60;
+        s_snooze_end = 0; /* the spell is over: a later one gets all its snoozes */
+        s_snoozes = 0;
+    } else {
+        if (s_snooze_end && newly_overdue) {
+            ESP_LOGI(TAG, "another dose is overdue: snooze over");
+            s_snooze_end = 0;
+            s_next_alert = 0;
+        } else if (s_snooze_end && now >= s_snooze_end) {
+            ESP_LOGI(TAG, "snooze over, %d left", DOSE_SNOOZE_MAX - s_snoozes);
+            s_snooze_end = 0;
+            matter_dev_renotify(); /* Home: another notification */
+        }
+        if (!s_snooze_end && (!s_next_alert || now >= s_next_alert)) {
+            audio_play(AUDIO_ALERT);
+            s_next_alert = now + ALERT_REPEAT_MIN * 60;
+        }
     }
+    update_snooze_code();
+    changed |= s_dirty; /* the snooze changed */
+    s_dirty = false;
+
+    publish();
+    publish_sync();
     return changed;
 }

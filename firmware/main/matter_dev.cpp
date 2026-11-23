@@ -91,6 +91,8 @@ static bool s_pub_overdue;
 static bool s_resync = true;
 
 static bool s_overdue_sent; /* this module's task */
+static bool s_renotify;     /* under s_mutex */
+#define RENOTIFY_MS 3000
 
 static bridged_t *find_bridged(uint8_t uid)
 {
@@ -280,6 +282,8 @@ static void sync_endpoints(void)
     bool overdue = s_pub_overdue;
     bool resync = s_resync;
     s_resync = false;
+    bool renotify = s_renotify;
+    s_renotify = false;
     if (count > 0) {
         memcpy(doses, s_pub, count * sizeof(matter_dose_t));
     }
@@ -294,6 +298,13 @@ static void sync_endpoints(void)
         set_contact(endpoint::get_id(sensor->ep), !overdue);
         s_overdue_sent = overdue;
         ESP_LOGI(TAG, "overdue sensor: %s", overdue ? "open (overdue)" : "closed");
+    } else if (sensor && overdue && renotify) {
+        /* Closed for a moment, then open: Home notifies on the new opening */
+        uint16_t id = endpoint::get_id(sensor->ep);
+        set_contact(id, true);
+        vTaskDelay(pdMS_TO_TICKS(RENOTIFY_MS));
+        set_contact(id, false);
+        ESP_LOGI(TAG, "overdue sensor: opened again (snooze over)");
     }
 
     /* Deleted doses */
@@ -407,6 +418,17 @@ void matter_dev_publish(const matter_dose_t *doses, int count, bool overdue)
     if (changed) {
         xTaskNotifyGive(s_task);
     }
+}
+
+void matter_dev_renotify(void)
+{
+    if (!s_task) {
+        return;
+    }
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_renotify = true;
+    xSemaphoreGive(s_mutex);
+    xTaskNotifyGive(s_task);
 }
 
 bool matter_dev_next_request(uint8_t *uid, bool *on)

@@ -112,6 +112,8 @@ static void rebuild_doses(void *arg)
 #define UNDO_AMBER 0xfbbf24
 #define UNDO_AMBER_TEXT 0x111827
 #define OVERDUE_BORDER 0xef4444
+#define SNOOZE_BLUE 0x93c5fd /* the snooze button, on the inverted strip */
+#define SNOOZE_BLUE_TEXT 0x111827
 #define HOLD_UNDO_MS 1000
 
 static int s_today[DOSE_MAX]; /* indices of the doses due today, in time order */
@@ -409,6 +411,64 @@ static void arrow_cb(lv_obj_t *obj, void *user_data)
     audio_play(AUDIO_CLICK);
 }
 
+/* ---- Snooze: the strip under an overdue card (where Undo goes; Undo wins) ---- */
+
+static bool snooze_strip_wanted(void)
+{
+    int i = doses_next();
+    return i >= 0 && dose_state(i) == DOSE_OVERDUE && (doses_snooze_until() >= 0 || doses_snoozes_left() > 0);
+}
+
+static void snooze_cb(lv_obj_t *obj, void *user_data)
+{
+    (void)obj;
+    (void)user_data;
+    if (doses_snooze(time(NULL))) {
+        audio_play(AUDIO_CLICK);
+        lv_async_call(refresh_snap_async, NULL); /* not from inside the strip's own event */
+    }
+}
+
+static void build_snooze_strip(lv_obj_t *area)
+{
+    lv_obj_t *strip = plain_obj(area);
+    lv_obj_set_size(strip, COL_W, UNDO_H);
+    lv_obj_set_pos(strip, COL_X, CARD_Y + CARD_H - UNDO_H);
+    lv_obj_set_style_radius(strip, 14, 0);
+    lv_obj_set_style_bg_opa(strip, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(strip, lv_color_hex(UI_T->text), 0); /* inverted, as the Undo strip */
+    lv_obj_set_style_pad_top(strip, 6, 0);
+    lv_obj_set_style_pad_hor(strip, 8, 0);
+    lv_obj_set_style_pad_bottom(strip, 8, 0);
+    lv_obj_set_flex_flow(strip, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(strip, 4, 0);
+
+    char text[32];
+    int until = doses_snooze_until(), left = doses_snoozes_left();
+    if (until >= 0) {
+        /* Snoozed: no button until it ends (one at a time) */
+        lv_obj_set_flex_align(strip, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        snprintf(text, sizeof(text), "Quiet until %02d%02d", until / 60, until % 60);
+        label(strip, text, &inter_14_semibold, UI_T->bg);
+        snprintf(text, sizeof(text), left == 1 ? "1 snooze left" : "%d snoozes left", left);
+        label(strip, text, &inter_12_semibold, UI_T->bg);
+        return;
+    }
+    snprintf(text, sizeof(text), left == 1 ? "1 snooze left" : "%d snoozes left", left);
+    lv_obj_t *l = label(strip, text, &inter_12_semibold, UI_T->bg);
+    lv_obj_set_width(l, LV_PCT(100));
+    lv_obj_t *btn = plain_obj(strip);
+    lv_obj_set_width(btn, LV_PCT(100));
+    lv_obj_set_flex_grow(btn, 1);
+    lv_obj_set_style_radius(btn, 8, 0);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(btn, lv_color_hex(SNOOZE_BLUE), 0);
+    lv_obj_set_style_bg_color(btn, lv_color_darken(lv_color_hex(SNOOZE_BLUE), LV_OPA_20), LV_STATE_PRESSED);
+    snprintf(text, sizeof(text), "Snooze %d min", DOSE_SNOOZE_MIN);
+    lv_obj_center(label(btn, text, &inter_14_semibold, SNOOZE_BLUE_TEXT));
+    ui_on_tap(btn, snooze_cb, NULL);
+}
+
 /* ---- The card ---- */
 
 static void take_cb(lv_obj_t *obj, void *user_data)
@@ -485,8 +545,10 @@ static void build_done_card(lv_obj_t *card)
     }
 }
 
-static void build_card(lv_obj_t *area, bool undo)
+/* strip: the Undo or Snooze strip shares the column, under a shorter card */
+static void build_card(lv_obj_t *area, bool strip)
 {
+    bool undo = strip; /* same layout for both strips */
     lv_obj_t *card = plain_obj(area);
     lv_obj_set_size(card, COL_W, undo ? CARD_H - UNDO_H - UNDO_GAP : CARD_H);
     lv_obj_set_pos(card, COL_X, CARD_Y);
@@ -539,7 +601,7 @@ static void build_card(lv_obj_t *area, bool undo)
     }
 
     if (undo && overdue) {
-        return; /* no room for the hint above the Undo strip with the late badge */
+        return; /* no room for the hint above a strip with the late badge */
     }
     const lv_font_t *hint_font = undo ? &inter_12_semibold : &inter_14_semibold;
     lv_obj_t *hint = label(card, "Tap when taken", hint_font, text);
@@ -687,9 +749,12 @@ static void build_doses(lv_obj_t *area)
         undo_cancel();
         undo = -1;
     }
-    build_card(area, undo >= 0);
+    bool snooze = undo < 0 && snooze_strip_wanted();
+    build_card(area, undo >= 0 || snooze);
     if (undo >= 0) {
         build_undo_strip(area, undo);
+    } else if (snooze) {
+        build_snooze_strip(area);
     }
 }
 

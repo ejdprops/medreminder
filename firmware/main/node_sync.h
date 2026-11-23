@@ -22,10 +22,14 @@ bool node_sync_take_state(doses_snapshot_t *snap);
 /* Main unit: nodes heard from recently (known) and how many of them hold the current state */
 void node_sync_status(int *synced, int *known);
 
-/* Node: ask the main unit to take (take false: undo) the dose with this uid (retried until its new
- * state arrives). Main unit, UI task: the next take/undo request from a node, if any. */
-void node_sync_request_take(uint8_t uid, bool take);
-bool node_sync_next_take(uint8_t *uid, bool *take);
+/* What a node can ask the main unit for */
+typedef enum { NODE_REQ_TAKE, NODE_REQ_UNDO, NODE_REQ_SNOOZE } node_req_t;
+
+/* Node: ask the main unit to take / undo the dose with this uid, or snooze the overdue chime (uid
+ * unused); retried until the main unit's new state arrives. Main unit, UI task: the next request
+ * from a node, if any. */
+void node_sync_request(uint8_t uid, node_req_t req);
+bool node_sync_next_request(uint8_t *uid, node_req_t *req);
 
 /* Node: the main unit was heard from recently */
 bool node_sync_connected(void);

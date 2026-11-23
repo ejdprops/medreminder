@@ -20,3 +20,5 @@ void link_start(void);
 bool link_get(link_view_t *v);
 /* Take (take false: undo) the dose with this uid (the node sends it on to the C5) */
 void link_take(uint8_t uid, bool take);
+/* Snooze the overdue chime (the node sends it on to the C5; the new state shows it) */
+void link_snooze(void);
