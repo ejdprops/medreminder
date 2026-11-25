@@ -31,7 +31,7 @@ typedef struct {
     uint8_t uid; /* dose_def_t.uid: the dose's endpoint follows it through edits and re-sorting */
     bool on;
     char label[MATTER_DOSE_LABEL_MAX + 1];
-    char serial[MATTER_DOSE_SERIAL_MAX + 1]; /* "K-0900", weekly "K-0900-TUE" */
+    char serial[MATTER_DOSE_SERIAL_MAX + 1]; /* "K-0900-C03", weekly "K-0900-TUE-C03" (C = palette index) */
 } matter_dose_t;
 
 /* From the UI task (doses.c): the doses Home should show and whether any is overdue. Cheap when

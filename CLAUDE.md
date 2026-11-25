@@ -416,7 +416,8 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       StateChange event).
     - One On/Off Plug-in Unit per dose, NodeLabel "<name> <time>" ("Karen 0930", + " TUE" for
       weekly), on = taken today. Bridged Basic Information: Manufacturer/Product from the device's
-      own config, SerialNumber "K-0930-TUE" (initial, time, weekday), UniqueID "dose-<uid>". On/off from Home takes/undoes it (same as a tap); doses not due today stay off
+      own config, SerialNumber "K-0930-TUE-C03" (initial, time, weekday, palette index; the Med Dot
+      app reads time/weekday/color from it), UniqueID "dose-<uid>". On/off from Home takes/undoes it (same as a tap); doses not due today stay off
       and writes to them are set back.
     - Stable identity: each dose has a `uid` (1-255, the former padding byte of `dose_def_t`, so
       the `sched2` layout is unchanged; assigned on load for older saves, counter in NVS

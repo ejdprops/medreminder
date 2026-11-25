@@ -561,10 +561,11 @@ static void publish(void)
         memset(doses[i].label, 0, sizeof(doses[i].label)); /* compared with memcmp */
         snprintf(doses[i].label, sizeof(doses[i].label), "%.15s %.4s%s%.3s", d->name, t, day >= 0 ? " " : "",
                  day >= 0 ? wday[day] : "");
-        /* Serial: first letter of the name, the time, the weekday: "K-0900-TUE" */
+        /* Serial: first letter of the name, the time, the weekday, the palette index: "K-0900-TUE-C03". The Med Dot
+         * app (apple/) reads the color from the "-C<index>" suffix. */
         memset(doses[i].serial, 0, sizeof(doses[i].serial));
-        snprintf(doses[i].serial, sizeof(doses[i].serial), "%c-%.4s%s%.3s", toupper((unsigned char)d->name[0]), t,
-                 day >= 0 ? "-" : "", day >= 0 ? wday[day] : "");
+        snprintf(doses[i].serial, sizeof(doses[i].serial), "%c-%.4s%s%.3s-C%02u", toupper((unsigned char)d->name[0]),
+                 t, day >= 0 ? "-" : "", day >= 0 ? wday[day] : "", (unsigned)d->color);
         overdue |= s_states[i] == DOSE_OVERDUE;
     }
     matter_dev_publish(doses, s_count, overdue);
