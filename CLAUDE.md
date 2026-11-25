@@ -670,6 +670,28 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       the most complex device); editing from the dashboard (requests the C5 validates) only if
       wanted later.
 
+  - **7i** (started 2026-11-25) **Med Dot**, a SwiftUI app in `apple/` (`MedDot.xcodeproj`,
+    Xcode 27.2, all OS 26.0+). Target `MedDot`: one multiplatform app for iPhone, iPad and
+    Apple TV (`com.averaklabs.meddot`); target `MedDot Watch` (`com.averaklabs.meddot.watchkitapp`)
+    is embedded in the iOS app only (platform filter). Folder-synced groups: `MedDot/`, `MedDotWatch/`
+    (entry points, assets), `Shared/` (in both targets: `HomeStore.swift`, `DosesView.swift`).
+    Reads dose status from Apple Home with HomeKit (entitlement + usage text on both targets):
+    accessories with manufacturer "Averak Labs", On/Off = dose taken, the contact sensor open =
+    overdue (7e); no firmware changes. The simulators have no real home ("No home found"): real
+    data needs a device and a development team. Build checks (`apple/build/` is gitignored):
+    `xcodebuild -project MedDot.xcodeproj -scheme MedDot -destination 'generic/platform=iOS Simulator' -derivedDataPath build build`
+    (also `tvOS Simulator`; scheme `"MedDot Watch"` with `watchOS Simulator`). Keep its commits
+    separate from firmware work.
+    - 2026-11-25: runs on the iPhone (EDITH, iPhone Air, iOS 27.2) and the Living Room Apple TV
+      (paired with Xcode over the network) and the Apple Watch, and lists every dose from Home
+      with taken checks. Device run notes: the first debugger launch sits on a black screen for a
+      while (lldb loading HomeKit's libraries), later ones are quick; Xcode showed the phone as
+      "mismatched" / "no DDI" until `xcrun devicectl device info ddiServices --device <UDID>`
+      mounted the disk image; run the `MedDot` scheme on the phone (the watch app is embedded),
+      `MedDot Watch` only targets a watch. Watch Developer Mode only appears in its Settings after
+      Xcode has seen the watch (via the iPhone, Devices and Simulators). The watch simulator never
+      grants HomeKit access.
+
 - Licensing: Waveshare code is Apache-2.0. Keep headers on copied files and list them in a
   `THIRD_PARTY_LICENSES` file. `esp_xiaozhi` has its own license; don't copy it.
 
