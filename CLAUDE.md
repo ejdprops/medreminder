@@ -692,6 +692,15 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       `MedDot Watch` only targets a watch. Watch Developer Mode only appears in its Settings after
       Xcode has seen the watch (via the iPhone, Devices and Simulators). The watch simulator never
       grants HomeKit access.
+    - iPhone/iPad layout (`MedDot/PhoneDosesView.swift`, iOS only; TV and Watch still use the plain
+      `Shared/DosesView.swift`): banner date · time, next dose as a big card in its color (tap =
+      take via the On/Off write, 10 s Undo strip; disabled until 60 min before), "All done today"
+      card, today's rows in dose colors (hold: undo a taken one / take the due one). `Shared/Today.swift`
+      computes states like the C5; Home has no "overdue after", so while the sensor is open every
+      untaken past dose counts as late. Colors: `Shared/DoseColors.swift` (copy of
+      `dose_colors.c`, keep in step) from the serial's `-C<index>`; slate if missing. The serial is
+      read via its HAP type id (`HMCharacteristicTypeSerialNumber` is deprecated but still works).
+      Checked 2026-11-25: colors match the C5.
 
 - Licensing: Waveshare code is Apache-2.0. Keep headers on copied files and list them in a
   `THIRD_PARTY_LICENSES` file. `esp_xiaozhi` has its own license; don't copy it.
