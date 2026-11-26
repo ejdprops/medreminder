@@ -31,6 +31,13 @@ struct PhoneDosesView: View {
                 }
             }
             .navigationTitle("Med Dot")
+            .toolbar {
+                NavigationLink {
+                    SettingsView()
+                } label: {
+                    Label("Settings", systemImage: "gearshape")
+                }
+            }
             .alert("Home didn't take the change", isPresented: Binding(
                 get: { error != nil }, set: { if !$0 { error = nil } })) {
                 Button("OK", role: .cancel) {}
@@ -208,15 +215,7 @@ private struct DoseRow: View {
     let isNext: Bool
 
     var body: some View {
-        let text = DoseColors.text(dose.tile.colorIndex)
-        HStack(spacing: 14) {
-            Text(Today.time(dose.tile.minute))
-                .font(.body.weight(.semibold))
-                .monospacedDigit()
-            Text(dose.tile.name)
-                .font(.body.weight(.semibold))
-                .lineLimit(1)
-            Spacer()
+        DosePill(minute: dose.tile.minute, name: dose.tile.name, color: dose.tile.colorIndex) {
             switch dose.state {
             case .taken: Image(systemName: "checkmark")
             case .overdue: Text("Late").font(.footnote.weight(.bold))
@@ -224,17 +223,12 @@ private struct DoseRow: View {
             case .upcoming: EmptyView()
             }
         }
-        .foregroundStyle(text)
-        .padding(.horizontal, 16)
-        .frame(minHeight: 48)
-        .background(DoseColors.color(dose.tile.colorIndex), in: RoundedRectangle(cornerRadius: 12))
         .overlay {
             if dose.state == .overdue {
                 RoundedRectangle(cornerRadius: 12).strokeBorder(DoseColors.overdue, lineWidth: 3)
             }
         }
         .opacity(dose.state == .taken ? 0.55 : 1)
-        .accessibilityElement(children: .combine)
     }
 }
 

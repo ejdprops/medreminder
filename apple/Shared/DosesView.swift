@@ -35,6 +35,15 @@ struct DosesView: View {
                 ForEach(store.doses) { dose in
                     DoseRow(dose: dose)
                 }
+                #if os(tvOS)
+                Section {
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
+                }
+                #endif
             }
         }
     }
