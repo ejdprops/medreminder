@@ -1,4 +1,4 @@
-/* App link: the Med Dot app (apple/) on an iPhone, iPad or Apple TV reads and changes this unit's
+/* App link: the Did I? app (apple/, Med Dot in code) on an iPhone, iPad or Apple TV reads and changes this unit's
  * settings over IP. The phone is on the home Wi-Fi and the unit on Thread; the Apple border routers
  * route between them (the unit's OMR address) and publish the unit's SRP service, so the app finds
  * it as _meddot._udp. Wire format and crypto: app_link_proto.h.
@@ -264,7 +264,7 @@ static void pair_cb(lv_obj_t *obj, void *user_data)
     app_link_pair_answer(true);
 }
 
-/* "Pair Med Dot on EDITH?" / "123 456" / "Check the app shows this code" / [Cancel] [Pair] */
+/* "Pair EDITH with this Pill Reminder?" / "123 456" / "Check the app shows this code" / [Cancel] [Pair] */
 static void dialog_open(const char *name, uint32_t code)
 {
     dialog_close();
@@ -292,7 +292,7 @@ static void dialog_open(const char *name, uint32_t code)
     lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     char text[80];
-    snprintf(text, sizeof(text), "Pair the Med Dot app\non %s?", name);
+    snprintf(text, sizeof(text), "Pair %s with\nthis Pill Reminder?", name);
     dlg_label(panel, text, &inter_14_semibold, UI_T->text);
     snprintf(text, sizeof(text), "%03lu %03lu", (unsigned long)(code / 1000), (unsigned long)(code % 1000));
     dlg_label(panel, text, &inter_30_semibold, UI_T->text);
