@@ -65,7 +65,6 @@ static lv_obj_t *s_delete_label;
 static bool s_delete_armed;
 
 static void build_rows(void);
-static const char *period_for(int minute);
 
 static lv_obj_t *plain_obj(lv_obj_t *parent)
 {
@@ -170,7 +169,7 @@ static void save_cb(lv_obj_t *obj, void *user_data)
     d.color = (uint8_t)s_color;
     d.opacity = 100; /* rows are solid; the field is kept for the saved layout */
     d.minute = lv_roller_get_selected(s_hour_roller) * 60 + lv_roller_get_selected(s_minute_roller) * 5;
-    strlcpy(d.period, period_for(d.minute), sizeof(d.period));
+    strlcpy(d.period, dose_period_for(d.minute), sizeof(d.period));
     int day = lv_roller_get_selected(s_day_roller); /* 0 = Daily, 1..7 = Sun..Sat */
     d.days = day == 0 ? DOSE_DAILY : (uint8_t)(1u << (day - 1));
 
@@ -195,18 +194,6 @@ static void delete_cb(lv_obj_t *obj, void *user_data)
     doses_delete(s_edit_index);
     close_edit();
     audio_play(AUDIO_CLICK);
-}
-
-/* Period for a time: before 11:00 AM, before 16:00 MID, before 20:00 PM, then BED */
-static const char *period_for(int minute)
-{
-    static const int ends[DOSE_PERIOD_COUNT - 1] = {11 * 60, 16 * 60, 20 * 60};
-    for (int p = 0; p < DOSE_PERIOD_COUNT - 1; p++) {
-        if (minute < ends[p]) {
-            return dose_periods[p];
-        }
-    }
-    return dose_periods[DOSE_PERIOD_COUNT - 1];
 }
 
 /* Header sample: how the dose's row looks on the home screen */
@@ -536,6 +523,18 @@ void ui_doses_invalidate(void)
         lv_obj_delete(s_list_screen);
         s_list_screen = NULL;
     }
+}
+
+void ui_doses_changed(void)
+{
+    if (s_list_screen && !s_edit_screen) {
+        build_rows();
+    }
+}
+
+bool ui_doses_editing(void)
+{
+    return s_edit_screen != NULL;
 }
 
 void ui_doses_open(void)

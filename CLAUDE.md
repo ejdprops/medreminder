@@ -701,6 +701,33 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       `dose_colors.c`, keep in step) from the serial's `-C<index>`; slate if missing. The serial is
       read via its HAP type id (`HMCharacteristicTypeSerialNumber` is deprecated but still works).
       Checked 2026-11-25: colors match the C5.
+    - Settings (`Shared/SettingsView.swift`, iPhone gear / TV list bottom; not on the Watch):
+      "This device" = Appearance (AppStorage, local only); "Pill Reminder" = shared state through
+      the app link (7j, `Shared/AppLink.swift`: NWBrowser `_meddot._udp`, CryptoKit pairing, key +
+      counter in the keychain, counter = max(last + 1, seconds since 2024 x 16)): pair/unpair,
+      Overdue after, Doses list (`DosePill` rows like the home page) + editor (name, hour/minute,
+      repeat, the C5's 18 picker colors). `MedDot-Info.plist` adds NSBonjourServices (merged with
+      the generated plist). Tested on the iPhone 2026-11-25: pair, add/delete a dose. TV not yet.
+
+  - **7j** (started 2026-11-25) **app link**: the Med Dot app changes the C5's shared state over IP
+    (`main/app_link.c`, wire format `main/app_link_proto.h`, MAIN role with a display only).
+    UDP 49232 on the Thread netif; SRP service `Pill Reminder XXXXXX._meddot._udp` (TXT id=MAC) via
+    the border routers, so Wi-Fi devices find it with DNS-SD and reach the OMR address.
+    - Shared vs local (user's rule): the app may change only the dose schedule and "Overdue after".
+      Dark mode, brightness, volume and screen off stay local to each device (the C5 refuses other
+      mask bits; the apps keep their own).
+    - Pairing: P-256 ECDH + HKDF -> key + 6-digit code; the C5 shows "Pair the Med Dot app on
+      <name>?" with the code and Pair/Cancel (60 s). Up to 6 apps in NVS `app_link/clients`
+      (oldest replaced). Requests: client id, counter (must grow; saved on writes), op, body,
+      HMAC-SHA256/16. Ops: GET/SET settings, GET_DOSES, SET_DOSE (uid 0 = add; the C5 editor's
+      rules and messages via `doses_set`, refused while the C5 editor is open), DELETE_DOSE, FORGET.
+    - Matter's SRP callback memsets removed services as its own (bigger) records: ours sits in a
+      1.5 KB buffer; re-added every 30 s if Matter's SRP handling removed it.
+    - Test client: `tools/app_link_client.py` (throwaway venv with `cryptography`; `--state` file
+      holds the key): pair / get / set overdue=N / doses / dose name= time= days= color= [uid=] /
+      delete uid=N / forget. Tested 2026-11-25: pairing, read, overdue set, replay dropped,
+      bad values refused, add/edit/delete a dose, clash message, remote change redraws Settings.
+      Internal RAM idle 63.2 KB (-1.8 KB).
 
 - Licensing: Waveshare code is Apache-2.0. Keep headers on copied files and list them in a
   `THIRD_PARTY_LICENSES` file. `esp_xiaozhi` has its own license; don't copy it.

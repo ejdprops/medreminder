@@ -22,6 +22,7 @@
 #include <app_priv.h>
 #include <matter_dev.h>
 #include <matter_info.h>
+#include <app_link.h>
 #include <node_sync.h>
 #include <ui.h>
 #include <fw_version.h>
@@ -250,6 +251,7 @@ extern "C" void app_main()
 
     matter_dev_start();
     node_sync_start();
+    app_link_start();
     uart_link_start();
 
     time_sync_start();

@@ -412,6 +412,23 @@ static void build(void)
     lv_obj_align(ver, LV_ALIGN_BOTTOM_LEFT, 8, -6);
 }
 
+void ui_settings_changed(void)
+{
+    if (!s_screen) {
+        return;
+    }
+    lv_obj_t *old = s_screen;
+    if (lv_screen_active() == old) {
+        build();
+        s_last_fabrics = -1;
+        refresh_status();
+        lv_screen_load(s_screen);
+    } else {
+        s_screen = NULL;
+    }
+    lv_obj_delete_async(old);
+}
+
 void ui_settings_open(void)
 {
     if (!s_screen) {

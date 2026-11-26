@@ -55,6 +55,17 @@ typedef struct {
 
 const char *const dose_periods[DOSE_PERIOD_COUNT] = {"AM", "MID", "PM", "BED"};
 
+const char *dose_period_for(int minute)
+{
+    static const int ends[DOSE_PERIOD_COUNT - 1] = {11 * 60, 16 * 60, 20 * 60};
+    for (int p = 0; p < DOSE_PERIOD_COUNT - 1; p++) {
+        if (minute < ends[p]) {
+            return dose_periods[p];
+        }
+    }
+    return dose_periods[DOSE_PERIOD_COUNT - 1];
+}
+
 /* Starting color for doses that have none yet (defaults, migrated schedules): by period */
 static uint8_t period_color(const char *period)
 {

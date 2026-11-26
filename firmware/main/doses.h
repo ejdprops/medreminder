@@ -18,6 +18,8 @@ typedef enum { DOSE_TAKEN, DOSE_NEXT, DOSE_LATER, DOSE_OVERDUE } dose_state_t;
  * them */
 #define DOSE_PERIOD_COUNT 4
 extern const char *const dose_periods[DOSE_PERIOD_COUNT];
+/* Period for a time: before 11:00 AM, before 16:00 MID, before 20:00 PM, then BED */
+const char *dose_period_for(int minute);
 
 /* Dose colors. The index is stored per dose, so only append to the palette. dose_color_order is
  * what the picker offers, in its order: not every palette color (dull ones were dropped, doses
