@@ -753,9 +753,17 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
         com.averaklabs.meddot` (attaching to the running app failed), dSYM via `dsymutil` on
         `MedDot.debug.dylib`, `xctrace symbolicate`, then export the time-profile table.
       - No Appearance setting on the TV (the dashboard is always dark).
+      - Banner (2026-11-26): badge + "Did I?" (aqua #67E8F9) on the left; date and time
+        ("THU 26 NOV · 09:26 hrs") in the logo's font, Nunito Black, bundled as
+        `MedDot/Fonts/Nunito-Black.ttf` (a static wght-1000 instance of the variable font, names
+        set to "Nunito Black" / `Nunito-Black`; `UIAppFonts` in `MedDot-Info.plist`; OFL next to it,
+        no reserved font name). `Dash.brand(size)`.
       - The calendar and weather tiles are buttons (glow, 2% lift: `FocusRing(lift: FocusRing.tile)`).
-        Weather -> Weather location. Calendar -> `CalendarAgenda`: every event for the 14 days in
-        the tile's style (each event focusable so the remote can scroll), "Calendar feed" at the end.
+        Weather -> Weather location. Calendar -> `CalendarAgenda`, a week grid (2026-11-26; a
+        centered scrolling list was rejected): 7 day columns (today + 6), the next 7 by swiping right
+        from the last day (left from the first goes back; `onMoveCommand` at the edges), each day a
+        focusable column with a band and fixed-height chips (time + initial, title 2 lines;
+        outlined = all day / continuing), "+N more" when they don't fit; "Calendar feed" top right.
       - Simulator builds show sample doses and events (`HomeStore.showSample`,
         `CalendarFeed.showSample`): no Home in the simulator; never on devices.
     - Brand: app icon = the brand mark (7c.5; regenerate with `apple/tools/make_icons.py`, PNGs are

@@ -116,7 +116,7 @@ struct TVDashboardView: View {
 
     // MARK: Banner
 
-    /// Logo badge | "WED 25 NOV · 2112 hrs" (date blue, time green, as on the panel) | Settings
+    /// Badge + "Did I?" | "WED 25 NOV · 21:12 hrs" in the logo font (date blue, time green, as on the panel) | Settings
     private func banner(_ now: Date) -> some View {
         ZStack {
             HStack(spacing: 14) {
@@ -124,7 +124,7 @@ struct TVDashboardView: View {
                 Text("·").foregroundStyle(Dash.muted)
                 Text(Self.time(now)).foregroundStyle(Dash.time)
             }
-            .font(.system(size: 52, weight: .semibold))
+            .font(Dash.brand(52))
             .monospacedDigit()
             HStack {
                 NavigationLink {
@@ -137,6 +137,10 @@ struct TVDashboardView: View {
                 }
                 .buttonStyle(FocusRing(radius: Dash.banner * 0.2237, glow: Dash.violet))
                 .accessibilityLabel("About")
+                Text("Did I?")
+                    .font(Dash.brand(52))
+                    .foregroundStyle(Dash.brandColor)
+                    .padding(.leading, 18)
                 Spacer()
                 NavigationLink {
                     SettingsView()
@@ -253,7 +257,7 @@ struct TVDashboardView: View {
     private static func time(_ d: Date) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "HHmm"
+        f.dateFormat = "HH:mm"
         return f.string(from: d) + " hrs"
     }
 }
@@ -280,6 +284,10 @@ private enum Dash {
     static let top: CGFloat = 50
     static let pad: CGFloat = 32
     static let banner: CGFloat = 80
+    /// The logo's font (Nunito Black, bundled: MedDot/Fonts, OFL) for the banner and the name
+    static func brand(_ size: CGFloat) -> Font { .custom("Nunito-Black", size: size) }
+    /// The logo's "?" aqua
+    static let brandColor = Color(hex: 0x67e8f9)
     static let radius: CGFloat = 28
     static let rows = 5               // as on the C5 and the panel
 }
@@ -300,9 +308,12 @@ private struct FocusRing: ButtonStyle {
     /// How much the focused item grows; whole tiles use less (`.tile`) so they don't crowd the columns
     var lift: CGFloat = 1.06
     static let tile: CGFloat = 1.02
+    /// Halo and shadow strength (0-1); the calendar's day columns use a soft one
+    var halo: Double = 0.85
+    var shadow: Double = 0.6
 
     func makeBody(configuration: Configuration) -> some View {
-        Lift(configuration: configuration, radius: radius, glow: glow, lift: lift)
+        Lift(configuration: configuration, radius: radius, glow: glow, lift: lift, halo: halo, shadow: shadow)
     }
 
     private struct Lift: View {
@@ -310,6 +321,8 @@ private struct FocusRing: ButtonStyle {
         let radius: CGFloat
         let glow: Color
         let lift: CGFloat
+        let halo: Double
+        let shadow: Double
         @Environment(\.isFocused) private var focused
 
         var body: some View {
@@ -324,11 +337,11 @@ private struct FocusRing: ButtonStyle {
                             .fill(glow)
                             .padding(-6)
                             .blur(radius: 26)
-                            .opacity(0.85)
+                            .opacity(halo)
                             .transition(.opacity)
                     }
                 }
-                .shadow(color: .black.opacity(focused ? 0.6 : 0), radius: focused ? 24 : 0, y: focused ? 16 : 0)
+                .shadow(color: .black.opacity(focused ? shadow : 0), radius: focused ? 24 : 0, y: focused ? 16 : 0)
                 .brightness(focused ? 0.04 : 0)
                 .scaleEffect(configuration.isPressed ? 1 + (lift - 1) / 3 : focused ? lift : 1)
                 .zIndex(focused ? 1 : 0)
@@ -774,27 +787,35 @@ private struct CalendarTile: View {
 
     /// Bands and chips for the coming days; today always (or "Nothing else today"), other days only
     /// with something on them
+    /// One day's events (d days from today) as `.event` rows: all-day and continuing first, then by
+    /// time; today's timed events drop off when over
+    static func day(_ d: Int, _ events: [CalendarFeed.Event], now: Date) -> [Row] {
+        let cal = Calendar.current
+        guard let day = cal.date(byAdding: .day, value: d, to: cal.startOfDay(for: now)),
+              let next = cal.date(byAdding: .day, value: 1, to: day) else { return [] }
+        var items: [Row] = []
+        for e in events where e.start < next && (e.end > day || e.start >= day) {
+            let starts = e.start >= day
+            if d == 0, !e.allDay, e.end <= now, e.start < now { continue }   // over today
+            let time = !e.allDay && starts ? Today.time(cal.component(.hour, from: e.start) * 60
+                                                        + cal.component(.minute, from: e.start)) : nil
+            items.append(.event(e, time: time, id: "\(d)-\(e.start.timeIntervalSince1970)-\(e.title.hashValue)"))
+        }
+        items.sort { a, b in
+            guard case .event(let x, let tx, _) = a, case .event(let y, let ty, _) = b else { return false }
+            if (tx == nil) != (ty == nil) { return tx == nil }
+            return x.start < y.start
+        }
+        return items
+    }
+
     static func rows(_ events: [CalendarFeed.Event], now: Date) -> [Row] {
         let cal = Calendar.current
         let today = cal.startOfDay(for: now)
         var out: [Row] = []
         for d in 0..<CalendarFeed.days {
-            guard let day = cal.date(byAdding: .day, value: d, to: today),
-                  let next = cal.date(byAdding: .day, value: 1, to: day) else { continue }
-            var items: [Row] = []
-            for e in events where e.start < next && (e.end > day || e.start >= day) {
-                let starts = e.start >= day
-                if d == 0, !e.allDay, e.end <= now, e.start < now { continue }   // over today
-                let time = !e.allDay && starts ? Today.time(cal.component(.hour, from: e.start) * 60
-                                                            + cal.component(.minute, from: e.start)) : nil
-                items.append(.event(e, time: time, id: "\(d)-\(e.start.timeIntervalSince1970)-\(e.title.hashValue)"))
-            }
-            // all-day and continuing first, then by time
-            items.sort { a, b in
-                guard case .event(let x, let tx, _) = a, case .event(let y, let ty, _) = b else { return false }
-                if (tx == nil) != (ty == nil) { return tx == nil }
-                return x.start < y.start
-            }
+            guard let day = cal.date(byAdding: .day, value: d, to: today) else { continue }
+            let items = Self.day(d, events, now: now)
             if d == 0 {
                 out.append(.day("TODAY", today: true))
                 out += items.isEmpty ? [.none("Nothing else today")] : items
@@ -829,58 +850,175 @@ private struct CalendarTile: View {
     }
 }
 
-/// Calendar selected: every event for the next 14 days in the tile's style (day bands, chips), scrolled
-/// with the remote (each event takes focus so the list can move), then "Calendar feed" to change the
-/// link. Same rules as the tile: today's timed events drop off when over.
+/// Calendar selected: a week grid, today and the next 6 days side by side (a wall planner), the following
+/// 7 one swipe further. Each day: a band, then its events as chips (time and initial, title on up to 2
+/// lines; outlined = all day or continuing), "+N more" when they don't fit. Days take focus (the remote
+/// needs something to move between); right from the 7th day turns to the next week, left from the
+/// first goes back. "Calendar feed" top right.
 private struct CalendarAgenda: View {
     let feed: CalendarFeed
+    @State private var week = 0
+    @FocusState private var focusedDay: Int?
+
+    private static let chip: CGFloat = 104
+    private static let gap: CGFloat = 10
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("CALENDAR")
-                    .font(.system(size: 34, weight: .bold))
+        let now = Date.now
+        VStack(alignment: .leading, spacing: 24) {
+            header(now)
+            if feed.status == .ready {
+                HStack(spacing: 16) {
+                    ForEach(0..<7, id: \.self) { i in
+                        dayColumn(week * 7 + i, now: now)
+                            .focused($focusedDay, equals: i)
+                    }
+                }
+                .focusSection()
+                .onMoveCommand { dir in
+                    if dir == .right, focusedDay == 6, week == 0 {
+                        week = 1
+                        focusedDay = 0
+                    } else if dir == .left, focusedDay == 0, week == 1 {
+                        week = 0
+                        focusedDay = 6
+                    }
+                }
+            } else {
+                Text(Self.why(feed.status))
+                    .font(.system(size: 30, weight: .medium))
                     .foregroundStyle(Dash.calendarTitle)
-                    .padding(.bottom, 10)
-                if feed.status == .ready {
-                    ForEach(CalendarTile.rows(feed.events, now: .now)) { row in
-                        switch row {
-                        case .event:
-                            Button {} label: { CalendarTile.view(row) }
-                                .buttonStyle(FocusRing(radius: 12, glow: Cal.allDayEdge, lift: FocusRing.tile))
-                        default:
-                            CalendarTile.view(row)
-                                .padding(.top, 10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .padding(.horizontal, Dash.side)
+        .padding(.vertical, Dash.top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Dash.calendar)
+        .ignoresSafeArea()
+        .defaultFocus($focusedDay, 0)
+    }
+
+    /// CALENDAR · THU 26 NOV - WED 2 DEC, week dots, Calendar feed
+    private func header(_ now: Date) -> some View {
+        let cal = Calendar.current
+        let first = cal.date(byAdding: .day, value: week * 7, to: cal.startOfDay(for: now)) ?? now
+        let last = cal.date(byAdding: .day, value: 6, to: first) ?? now
+        return HStack(spacing: 24) {
+            Text("CALENDAR")
+                .font(.system(size: 40, weight: .bold))
+                .foregroundStyle(Dash.calendarTitle)
+            Text("\(Self.fmt(first, "EEE d MMM")) – \(Self.fmt(last, "EEE d MMM"))".uppercased())
+                .font(.system(size: 30, weight: .semibold))
+                .foregroundStyle(.white)
+            HStack(spacing: 10) {
+                ForEach(0..<2, id: \.self) { w in
+                    Circle().fill(w == week ? Color.white : Color.white.opacity(0.3)).frame(width: 12, height: 12)
+                }
+            }
+            Text(week == 0 ? "Next week: swipe right from the last day" : "This week: swipe left from the first day")
+                .font(.system(size: 22, weight: .medium))
+                .foregroundStyle(Dash.calendarTitle.opacity(0.8))
+            Spacer()
+            NavigationLink {
+                CalendarFeedView()
+            } label: {
+                Label("Calendar feed", systemImage: "link")
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 24)
+                    .frame(height: 64)
+                    .background(Cal.band, in: RoundedRectangle(cornerRadius: 16))
+            }
+            .buttonStyle(FocusRing(radius: 16, glow: Cal.allDayEdge))
+        }
+        .focusSection()
+    }
+
+    /// One day: band (TODAY / TOMORROW / SAT, then 28 NOV), chips, "+N more"
+    private func dayColumn(_ d: Int, now: Date) -> some View {
+        let cal = Calendar.current
+        let day = cal.date(byAdding: .day, value: d, to: cal.startOfDay(for: now)) ?? now
+        let items = CalendarTile.day(d, feed.events, now: now)
+        return Button {} label: {
+            VStack(alignment: .leading, spacing: Self.gap) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(d == 0 ? "TODAY" : d == 1 ? "TOMORROW" : Self.fmt(day, "EEEE").uppercased())
+                        .font(.system(size: 24, weight: .bold))
+                    Text(Self.fmt(day, "d MMM").uppercased())
+                        .font(.system(size: 20, weight: .semibold))
+                        .opacity(0.8)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(d == 0 ? Cal.bandToday : Cal.band, in: RoundedRectangle(cornerRadius: 12))
+                GeometryReader { geo in
+                    let fits = max(0, Int((geo.size.height + Self.gap) / (Self.chip + Self.gap)))
+                    let shown = items.count > fits ? max(0, fits - 1) : items.count
+                    VStack(alignment: .leading, spacing: Self.gap) {
+                        ForEach(items.prefix(shown)) { row in
+                            if case .event(let e, let time, _) = row { chip(e, time: time) }
+                        }
+                        if items.isEmpty {
+                            Text("Nothing on")
+                                .font(.system(size: 22, weight: .medium))
+                                .foregroundStyle(Dash.calendarTitle.opacity(0.7))
+                                .padding(.horizontal, 6)
+                        } else if shown < items.count {
+                            Text("+\(items.count - shown) more")
+                                .font(.system(size: 22, weight: .bold))
+                                .foregroundStyle(Dash.calendarTitle)
+                                .padding(.horizontal, 6)
                         }
                     }
-                } else {
-                    Text(Self.why(feed.status))
-                        .font(.system(size: 28, weight: .medium))
-                        .foregroundStyle(Dash.calendarTitle)
                 }
-                NavigationLink {
-                    CalendarFeedView()
-                } label: {
-                    Label("Calendar feed", systemImage: "link")
-                        .font(.system(size: 28, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 26)
-                        .frame(height: 70)
-                        .background(Cal.band, in: RoundedRectangle(cornerRadius: 18))
-                }
-                .buttonStyle(FocusRing(radius: 18, glow: Cal.allDayEdge))
-                .padding(.top, 30)
             }
-            .frame(maxWidth: 1100, alignment: .leading)
-            .padding(.vertical, 60)
-            .frame(maxWidth: .infinity)
+            .padding(10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 18))
         }
-        .background(Dash.calendar.ignoresSafeArea())
+        // a soft focus: seven big columns side by side made the full glow jarring
+        .buttonStyle(FocusRing(radius: 18, glow: Cal.allDayEdge, lift: 1.01, halo: 0.25, shadow: 0.3))
+        .accessibilityLabel(Self.fmt(day, "EEEE d MMMM") + ", \(items.count) events")
+    }
+
+    /// Time + initial on top, the title on up to 2 lines; filled = timed, outlined = all day / continuing
+    private func chip(_ e: CalendarFeed.Event, time: String?) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Badge(who: e.who)
+                Text(time ?? (e.allDay ? "All day" : "Cont."))
+                    .font(.system(size: 22, weight: .bold))
+                    .monospacedDigit()
+                    .foregroundStyle(Dash.calendarTitle)
+            }
+            Text(e.title)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, minHeight: Self.chip, maxHeight: Self.chip, alignment: .topLeading)
+        .background {
+            let shape = RoundedRectangle(cornerRadius: 12)
+            if time != nil { shape.fill(Cal.chip) } else { shape.strokeBorder(Cal.allDayEdge, lineWidth: 2) }
+        }
+    }
+
+    private static func fmt(_ d: Date, _ format: String) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = format
+        return f.string(from: d)
     }
 
     private static func why(_ status: CalendarFeed.Status) -> String {
         switch status {
-        case .noFeed: "No calendar yet: add its feed link below."
+        case .noFeed: "No calendar yet: add its feed link with Calendar feed, top right."
         case .loading: "Getting the calendar…"
         case .failed(let why): why
         case .ready: ""
