@@ -25,6 +25,15 @@ final class WeatherStore: NSObject, CLLocationManagerDelegate {
         var id: Date { time }
     }
 
+    struct Day: Identifiable {
+        let date: Date       // noon of the day at the place
+        let code: Int
+        let high: Int
+        let low: Int
+        let rain: Int        // highest chance that day, %
+        var id: Date { date }
+    }
+
     struct Now {
         let temp: Int
         let humidity: Int
@@ -32,7 +41,8 @@ final class WeatherStore: NSObject, CLLocationManagerDelegate {
         let high: Int
         let low: Int
         let rain: Int        // today's highest chance, %
-        let hours: [Hour]    // the next few, from the coming hour
+        let hours: [Hour]    // the next 24, from the current hour (the tile shows 5)
+        let days: [Day]      // today and the next 6
         let fetched: Date
     }
 
@@ -156,11 +166,11 @@ final class WeatherStore: NSObject, CLLocationManagerDelegate {
             .init(name: "latitude", value: String(format: "%.2f", c.latitude)),
             .init(name: "longitude", value: String(format: "%.2f", c.longitude)),
             .init(name: "current", value: "temperature_2m,relative_humidity_2m,weather_code"),
-            .init(name: "daily", value: "temperature_2m_max,temperature_2m_min,precipitation_probability_max"),
+            .init(name: "daily", value: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"),
             .init(name: "hourly", value: "temperature_2m,weather_code,precipitation_probability"),
             .init(name: "temperature_unit", value: "fahrenheit"),
             .init(name: "timezone", value: "auto"),
-            .init(name: "forecast_days", value: "2"),
+            .init(name: "forecast_days", value: "7"),
         ]
         do {
             let (data, response) = try await URLSession.shared.data(from: u.url!)
@@ -181,6 +191,8 @@ final class WeatherStore: NSObject, CLLocationManagerDelegate {
             let weather_code: Int
         }
         struct Daily: Decodable {
+            let time: [String]
+            let weather_code: [Int]
             let temperature_2m_max: [Double]
             let temperature_2m_min: [Double]
             let precipitation_probability_max: [Double?]
@@ -207,10 +219,23 @@ final class WeatherStore: NSObject, CLLocationManagerDelegate {
         let start = Date.now.addingTimeInterval(-59 * 60)   // from the current hour on
         var hours: [Hour] = []
         for (i, t) in r.hourly.time.enumerated() {
-            guard let d = f.date(from: t), d > start, hours.count < 5 else { continue }
+            guard let d = f.date(from: t), d > start, hours.count < 24 else { continue }
             hours.append(Hour(time: d, temp: Int(r.hourly.temperature_2m[i].rounded()),
                               code: r.hourly.weather_code[i],
                               rain: Int((r.hourly.precipitation_probability[i] ?? 0).rounded())))
+        }
+        let fd = DateFormatter()
+        fd.locale = Locale(identifier: "en_US_POSIX")
+        fd.dateFormat = "yyyy-MM-dd"
+        fd.timeZone = f.timeZone
+        var days: [Day] = []
+        for (i, t) in r.daily.time.enumerated() {
+            guard let d = fd.date(from: t), i < r.daily.weather_code.count else { continue }
+            // noon, so the day reads the same on this device even if the place is in another time zone
+            days.append(Day(date: d.addingTimeInterval(12 * 3600), code: r.daily.weather_code[i],
+                            high: Int(r.daily.temperature_2m_max[i].rounded()),
+                            low: Int(r.daily.temperature_2m_min[i].rounded()),
+                            rain: Int((r.daily.precipitation_probability_max[i] ?? 0).rounded())))
         }
         return Now(temp: Int(r.current.temperature_2m.rounded()),
                    humidity: Int(r.current.relative_humidity_2m.rounded()),
@@ -218,7 +243,7 @@ final class WeatherStore: NSObject, CLLocationManagerDelegate {
                    high: Int((r.daily.temperature_2m_max.first ?? 0).rounded()),
                    low: Int((r.daily.temperature_2m_min.first ?? 0).rounded()),
                    rain: Int(((r.daily.precipitation_probability_max.first ?? nil) ?? 0).rounded()),
-                   hours: hours, fetched: .now)
+                   hours: hours, days: days, fetched: .now)
     }
 
     // MARK: Codes

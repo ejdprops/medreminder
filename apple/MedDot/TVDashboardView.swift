@@ -193,9 +193,9 @@ struct TVDashboardView: View {
             .frame(maxWidth: .infinity)
 
             VStack(spacing: Dash.pad) {
-                // select: Weather location
+                // select: the week's forecast (Weather location from there)
                 NavigationLink {
-                    WeatherPlaceView()
+                    WeatherForecast(weather: weather)
                 } label: {
                     Tile(title: weather.placeName.map { "WEATHER · \($0.uppercased())" } ?? "WEATHER",
                          color: Dash.weather, titleColor: Dash.weatherTitle) {
@@ -1100,7 +1100,7 @@ private struct WeatherTile: View {
                 .minimumScaleFactor(0.8)
                 Spacer(minLength: 0)
                 HStack(spacing: 0) {
-                    ForEach(w.hours) { h in
+                    ForEach(w.hours.prefix(5)) { h in
                         VStack(spacing: 6) {
                             Text(Self.hour(h.time))
                                 .font(.system(size: 22, weight: .semibold))
@@ -1125,16 +1125,170 @@ private struct WeatherTile: View {
         }
     }
 
-    private static func night(_ d: Date) -> Bool {
+    static func night(_ d: Date) -> Bool {
         let h = Calendar.current.component(.hour, from: d)
         return h < 6 || h >= 19
     }
 
     /// "2100", 24 h as everywhere else
-    private static func hour(_ d: Date) -> String {
+    static func hour(_ d: Date) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "HHmm"
+        return f.string(from: d)
+    }
+}
+
+/// Weather selected: the week's forecast, laid out like the calendar's week. Top: now (sky, temperature,
+/// condition, today's high / low / rain / humidity) and the next 12 hours. Below: today and the next 6
+/// days as columns (day, sky, condition, high, low, rain). "Weather location" top right; nothing else
+/// takes focus, so it starts there.
+private struct WeatherForecast: View {
+    let weather: WeatherStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            header
+            if let w = weather.now {
+                now(w)
+                HStack(spacing: 16) {
+                    ForEach(Array(w.days.prefix(7).enumerated()), id: \.offset) { i, d in
+                        day(d, index: i)
+                    }
+                }
+                .frame(maxHeight: .infinity)
+            } else {
+                Placeholder(text: weather.status == .noLocation
+                            ? "Choose a place with Weather location, top right"
+                            : "Getting the weather…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .padding(.horizontal, Dash.side)
+        .padding(.vertical, Dash.top)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Dash.weather)
+        .ignoresSafeArea()
+    }
+
+    private var header: some View {
+        HStack(spacing: 24) {
+            Text(weather.placeName.map { "WEATHER · \($0.uppercased())" } ?? "WEATHER")
+                .font(.system(size: 40, weight: .bold))
+                .foregroundStyle(Dash.weatherTitle)
+                .lineLimit(1)
+            if let w = weather.now {
+                Text("as of \(WeatherTile.hour(w.fetched))")
+                    .font(.system(size: 24, weight: .medium))
+                    .foregroundStyle(Dash.weatherTitle.opacity(0.8))
+            }
+            Spacer()
+            NavigationLink {
+                WeatherPlaceView()
+            } label: {
+                Label("Weather location", systemImage: "location")
+                    .font(.system(size: 26, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 24)
+                    .frame(height: 64)
+                    .background(Color.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 16))
+            }
+            .buttonStyle(FocusRing(radius: 16, glow: Dash.weatherTitle))
+        }
+    }
+
+    /// Now, big, then the next 12 hours
+    private func now(_ w: WeatherStore.Now) -> some View {
+        HStack(alignment: .center, spacing: 40) {
+            HStack(spacing: 22) {
+                Image(systemName: WeatherStore.symbol(w.code, night: WeatherTile.night(.now)))
+                    .symbolRenderingMode(.multicolor)
+                    .font(.system(size: 96))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(w.temp)°")
+                        .font(.system(size: 104, weight: .bold))
+                        .monospacedDigit()
+                    Text(WeatherStore.condition(w.code))
+                        .font(.system(size: 32, weight: .semibold))
+                    Text("H \(w.high)° · L \(w.low)° · Rain \(w.rain)% · Humidity \(w.humidity)%")
+                        .font(.system(size: 26, weight: .semibold))
+                        .foregroundStyle(Dash.weatherTitle)
+                }
+            }
+            .foregroundStyle(.white)
+            .fixedSize()
+            HStack(spacing: 0) {
+                ForEach(w.hours.prefix(12)) { h in
+                    VStack(spacing: 8) {
+                        Text(WeatherTile.hour(h.time))
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(Dash.weatherTitle)
+                        Image(systemName: WeatherStore.symbol(h.code, night: WeatherTile.night(h.time)))
+                            .symbolRenderingMode(.multicolor)
+                            .font(.system(size: 32))
+                            .frame(height: 40)
+                        Text("\(h.temp)°")
+                            .font(.system(size: 28, weight: .bold))
+                            .foregroundStyle(.white)
+                        Text(h.rain > 0 ? "\(h.rain)%" : " ")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundStyle(Dash.weatherTitle)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(.vertical, 18)
+            .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 18))
+        }
+    }
+
+    /// TODAY / TOMORROW / SATURDAY, date, sky, condition, high, low, rain
+    private func day(_ d: WeatherStore.Day, index: Int) -> some View {
+        VStack(spacing: 14) {
+            VStack(spacing: 2) {
+                Text(index == 0 ? "TODAY" : index == 1 ? "TOMORROW" : Self.fmt(d.date, "EEEE").uppercased())
+                    .font(.system(size: 24, weight: .bold))
+                Text(Self.fmt(d.date, "d MMM").uppercased())
+                    .font(.system(size: 20, weight: .semibold))
+                    .opacity(0.8)
+            }
+            .foregroundStyle(.white)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity)
+            .background(Color.black.opacity(index == 0 ? 0.3 : 0.2), in: RoundedRectangle(cornerRadius: 12))
+            Image(systemName: WeatherStore.symbol(d.code))
+                .symbolRenderingMode(.multicolor)
+                .font(.system(size: 76))
+                .frame(height: 96)
+            Text(WeatherStore.condition(d.code))
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .frame(height: 64, alignment: .top)
+            Text("\(d.high)°")
+                .font(.system(size: 64, weight: .bold))
+                .foregroundStyle(.white)
+                .monospacedDigit()
+            Text("\(d.low)°")
+                .font(.system(size: 40, weight: .semibold))
+                .foregroundStyle(Dash.weatherTitle)
+                .monospacedDigit()
+            Spacer(minLength: 0)
+            Label("\(d.rain)%", systemImage: "drop.fill")
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(d.rain >= 30 ? Color.white : Dash.weatherTitle.opacity(0.8))
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Color.black.opacity(0.14), in: RoundedRectangle(cornerRadius: 18))
+        .accessibilityElement(children: .combine)
+    }
+
+    private static func fmt(_ d: Date, _ format: String) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = format
         return f.string(from: d)
     }
 }

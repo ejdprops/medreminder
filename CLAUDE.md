@@ -759,7 +759,10 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
         set to "Nunito Black" / `Nunito-Black`; `UIAppFonts` in `MedDot-Info.plist`; OFL next to it,
         no reserved font name). `Dash.brand(size)`.
       - The calendar and weather tiles are buttons (glow, 2% lift: `FocusRing(lift: FocusRing.tile)`).
-        Weather -> Weather location. Calendar -> `CalendarAgenda`, a week grid (2026-11-26; a
+        Weather -> `WeatherForecast` (2026-11-26): now + the next 12 hours on top, then today and
+        the next 6 days as columns (day, sky, condition, high, low, rain); "Weather location" top
+        right. Open-Meteo `forecast_days=7` with daily `weather_code`; `Day.date` is noon at the
+        place so a chosen place in another time zone keeps its dates. Calendar -> `CalendarAgenda`, a week grid (2026-11-26; a
         centered scrolling list was rejected): 7 day columns (today + 6), the next 7 by swiping right
         from the last day (left from the first goes back; `onMoveCommand` at the edges), each day a
         focusable column with a band and fixed-height chips (time + initial, title 2 lines;
