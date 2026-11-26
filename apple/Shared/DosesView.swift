@@ -7,7 +7,7 @@ struct DosesView: View {
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle("Med Dot")
+                .navigationTitle("Did I?")
         }
     }
 
@@ -18,9 +18,9 @@ struct DosesView: View {
             message("Reading Apple Home…", icon: "house")
         case .noAccess:
             #if os(watchOS)
-            message("Med Dot needs access to your home. Allow it on your iPhone in Settings > Privacy & Security > HomeKit.", icon: "lock")
+            message("Did I? needs access to your home. Allow it on your iPhone in Settings > Privacy & Security > HomeKit.", icon: "lock")
             #else
-            message("Med Dot needs access to your home. Turn it on in Settings.", icon: "lock")
+            message("Did I? needs access to your home. Turn it on in Settings.", icon: "lock")
             #endif
         case .noHome:
             message("No home found.", icon: "house")

@@ -37,7 +37,7 @@ struct AboutView: View {
             }
 
             Section("App") {
-                LabeledContent("Name", value: "Med Dot")
+                LabeledContent("Name", value: "Did I?")
                 LabeledContent("Version", value: appVersion)
                 LabeledContent("Made by", value: "Averak Labs")
             }
@@ -56,7 +56,7 @@ struct AboutView: View {
             }
 
             Section {
-                Text("Med Dot shows the doses your Pill Reminder publishes to Apple Home, and changes its schedule over your home network once paired.")
+                Text("Did I? shows the doses your Pill Reminder publishes to Apple Home, and changes its schedule over your home network once paired.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

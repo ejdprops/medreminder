@@ -16,7 +16,7 @@ struct PhoneDosesView: View {
                 case .loading:
                     ContentUnavailableView("Reading Apple Home…", systemImage: "house")
                 case .noAccess:
-                    ContentUnavailableView("Med Dot needs access to your home",
+                    ContentUnavailableView("Did I? needs access to your home",
                                            systemImage: "lock",
                                            description: Text("Turn it on in Settings > Privacy & Security > HomeKit."))
                 case .noHome:
@@ -30,7 +30,7 @@ struct PhoneDosesView: View {
                     }
                 }
             }
-            .navigationTitle("Med Dot")   // back buttons; the page shows its own title under the badge
+            .navigationTitle("Did I?")   // back buttons; the page shows its own title under the badge
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1) }
@@ -68,7 +68,7 @@ struct PhoneDosesView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("About")
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Med Dot")
+                        Text("Did I?")
                             .font(.largeTitle.bold())
                         Text(Self.banner(now))
                             .font(.headline)

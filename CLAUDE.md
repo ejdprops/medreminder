@@ -679,7 +679,11 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       the most complex device); editing from the dashboard (requests the C5 validates) only if
       wanted later.
 
-  - **7i** (started 2026-11-25) **Med Dot**, a SwiftUI app in `apple/` (`MedDot.xcodeproj`,
+  - **7i** (started 2026-11-25) **Did I?** (was Med Dot; App Store name "Did I? Medication Reminder",
+    reserved in App Store Connect 2026-11-25; the name is for executive dysfunction's "did I take it?").
+    Only user-visible text says "Did I?": the project, targets, folders, bundle ids
+    (`com.averaklabs.meddot`), keychain service and `_meddot._udp` keep "MedDot" (bundle id is permanent
+    once published; changing it would mean re-pairing every device). A SwiftUI app in `apple/` (`MedDot.xcodeproj`,
     Xcode 27.2, all OS 26.0+). Target `MedDot`: one multiplatform app for iPhone, iPad and
     Apple TV (`com.averaklabs.meddot`); target `MedDot Watch` (`com.averaklabs.meddot.watchkitapp`)
     is embedded in the iOS app only (platform filter). Folder-synced groups: `MedDot/`, `MedDotWatch/`
