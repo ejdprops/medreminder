@@ -294,6 +294,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Did I?";
 				INFOPLIST_KEY_NSHomeKitUsageDescription = "Did I? reads today's doses from your Pill Reminder in Apple Home.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Did I? finds your Pill Reminder on the home network to change doses and settings.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Did I? uses your approximate location for the weather tile.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -336,6 +337,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = "Did I?";
 				INFOPLIST_KEY_NSHomeKitUsageDescription = "Did I? reads today's doses from your Pill Reminder in Apple Home.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Did I? finds your Pill Reminder on the home network to change doses and settings.";
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Did I? uses your approximate location for the weather tile.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

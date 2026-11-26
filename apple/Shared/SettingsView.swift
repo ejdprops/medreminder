@@ -36,6 +36,18 @@ struct SettingsView: View {
                 Picker("Appearance", selection: $appearance) {
                     ForEach(Appearance.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
                 }
+                #if os(tvOS)
+                NavigationLink {
+                    WeatherPlaceView()
+                } label: {
+                    LabeledContent("Weather location", value: WeatherStore.shared.chosen?.name ?? "Automatic")
+                }
+                NavigationLink {
+                    CalendarFeedView()
+                } label: {
+                    LabeledContent("Calendar feed", value: CalendarFeed.feedHost ?? "Not set")
+                }
+                #endif
             }
 
             Section {

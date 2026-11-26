@@ -48,6 +48,14 @@ final class HomeStore: NSObject {
     /// Take (true) or undo (false) a dose, like its switch in Home. The C5 refuses doses not due
     /// today and sets the switch back; the change comes back through the notifications.
     func setTaken(_ dose: DoseTile, _ taken: Bool) async throws {
+        #if targetEnvironment(simulator)
+        if let i = doses.firstIndex(where: { $0.id == dose.id }), power[dose.id] == nil {
+            let d = doses[i]
+            doses[i] = DoseTile(id: d.id, label: d.label, name: d.name, minute: d.minute, weekday: d.weekday,
+                                colorIndex: d.colorIndex, room: d.room, taken: taken)
+            return
+        }
+        #endif
         guard let c = power[dose.id] else { return }
         try await c.writeValue(taken)
     }
@@ -56,10 +64,16 @@ final class HomeStore: NSObject {
         if manager.authorizationStatus.contains(.determined),
            !manager.authorizationStatus.contains(.authorized) {
             status = .noAccess
+            #if targetEnvironment(simulator)
+            showSample()
+            #endif
             return
         }
         guard let home = manager.homes.first(where: { $0.isPrimary }) ?? manager.homes.first else {
             status = .noHome
+            #if targetEnvironment(simulator)
+            showSample()
+            #endif
             return
         }
         homeName = home.name
@@ -186,3 +200,28 @@ extension HomeStore: HMAccessoryDelegate {
         Task { @MainActor in self.reload() }
     }
 }
+
+#if targetEnvironment(simulator)
+extension HomeStore {
+    /// Simulators have no Apple Home: sample doses around the current time (one taken, the next due in
+    /// 20 min, later ones) so the layouts can be seen. Taps change them locally. Never in device builds.
+    fileprivate func showSample() {
+        guard doses.isEmpty else { status = .ready; return }
+        let now = Calendar.current.dateComponents([.hour, .minute], from: .now)
+        // kept inside the day (late at night the next one is further off rather than after midnight)
+        let m = min(max((now.hour ?? 12) * 60 + (now.minute ?? 0), 150), 1440 - 385)
+        func at(_ offset: Int) -> Int { (m + offset) / 5 * 5 }
+        let sample: [(String, Int, Int, Bool)] = [
+            ("Alex", at(-150), 0, true), ("Sam", at(20), 4, false), ("Vitamin D", at(140), 9, false),
+            ("Alex", at(260), 13, false), ("Sam", at(380), 8, false),
+        ]
+        homeName = "Sample Home"
+        doses = sample.map { name, minute, color, taken in
+            DoseTile(id: UUID(), label: "\(name) \(Today.time(minute))", name: name, minute: minute, weekday: nil,
+                     colorIndex: color, room: "Kitchen", taken: taken)
+        }.sorted { ($0.minute ?? 0) < ($1.minute ?? 0) }
+        overdue = false
+        status = .ready
+    }
+}
+#endif

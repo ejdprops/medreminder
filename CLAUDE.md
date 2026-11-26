@@ -713,6 +713,25 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       `dose_colors.c`, keep in step) from the serial's `-C<index>`; slate if missing. The serial is
       read via its HAP type id (`HMCharacteristicTypeSerialNumber` is deprecated but still works).
       Checked 2026-11-25: colors match the C5.
+    - Apple TV (`MedDot/TVDashboardView.swift`, 2026-11-25): the bedroom panel's layout and colors
+      (banner date · time with the badge and Settings; three columns: today's doses over the
+      next-dose card | calendar | weather over timer). Focus starts on the card; focus = lift + glow
+      in the item's own color (`FocusRing`). Select the card to take, a taken row to undo.
+      - Weather (`MedDot/Weather.swift`): Open-Meteo like the panel, °F, 15 min, + the next 5 hours;
+        location = the TV's own (asked once, rounded to ~1 km) or Settings > Weather location (city /
+        ZIP via MapKit search, this device only); the title shows the city.
+      - Calendar (`MedDot/CalendarFeed.swift`): the panel's iCalendar rules in Swift (RRULE
+        DAILY/WEEKLY/MONTHLY/YEARLY, INTERVAL, UNTIL, COUNT, BYDAY incl. "2SU"/"-1FR", BYMONTHDAY,
+        BYMONTH, EXDATE, TZID), 14 days. Checked against python-dateutil on a synthetic feed (every
+        rule, both DST changes, a year end) and on the real Cozi feed (counts/times only): identical.
+        Feed URL in the TV's keychain (Settings > Calendar feed; paste via the iPhone's TV keyboard).
+        The simulator can't paste: `SIMCTL_CHILD_DIDI_CALENDAR_URL=<url> xcrun simctl launch ...`
+        (simulator builds only). "Name:" prefix -> initial badge, "All" purple, others a fixed color
+        per name (sum of the name's characters into a 6-color list: Evan red, Karen royal blue).
+      - Timer (`MedDot/TVTimer.swift`): 5-60 min, Start/Pause/Resume/Reset; "Timer done" full screen
+        + the C5 chime every 10 s for 2 min; screen saver off while running.
+      - Simulator builds show sample doses and events (`HomeStore.showSample`,
+        `CalendarFeed.showSample`): no Home in the simulator; never on devices.
     - Brand: app icon = the brand mark (7c.5; regenerate with `apple/tools/make_icons.py`, PNGs are
       force-added because of `*.png` in .gitignore). iPhone home: the icon as a 90 pt badge left of a
       page-drawn "Med Dot" title and the date (opens About; iOS 26 nav-bar buttons can't be that

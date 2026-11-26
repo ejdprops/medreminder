@@ -10,6 +10,8 @@ struct MedDotApp: App {
             Group {
                 #if os(iOS)
                 PhoneDosesView()
+                #elseif os(tvOS)
+                TVDashboardView()
                 #else
                 DosesView()
                 #endif
