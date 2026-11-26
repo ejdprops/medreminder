@@ -217,12 +217,17 @@ extension HomeStore {
         ]
         homeName = "Sample Home"
         let nowMinute = (now.hour ?? 12) * 60 + (now.minute ?? 0)
-        doses = sample.map { name, minute, color, taken in
+        // SIMCTL_CHILD_DIDI_SAMPLE_LATE=1: one dose 20 min late, the overdue sensor open (the TV's alert)
+        let late = ProcessInfo.processInfo.environment["DIDI_SAMPLE_LATE"] != nil
+        var all: [(String, Int, Int, Bool)] = sample
+        if late { all.append(("Jordan", max(0, nowMinute - 20) / 5 * 5, 24, false)) }
+        doses = all.map { (name: String, minute: Int, color: Int, taken: Bool) -> DoseTile in
+            let done = taken || (minute < nowMinute && name != "Jordan")
             // past ones taken, so nothing is due unless tapped (keeps the ambient screen testable)
-            DoseTile(id: UUID(), label: "\(name) \(Today.time(minute))", name: name, minute: minute, weekday: nil,
-                     colorIndex: color, room: "Kitchen", taken: taken || minute < nowMinute)
+            return DoseTile(id: UUID(), label: "\(name) \(Today.time(minute))", name: name, minute: minute, weekday: nil,
+                     colorIndex: color, room: "Kitchen", taken: done)
         }.sorted { ($0.minute ?? 0) < ($1.minute ?? 0) }
-        overdue = false
+        overdue = late
         status = .ready
     }
 }

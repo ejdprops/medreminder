@@ -737,13 +737,55 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
         in dim red; the full dashboard shifts up to 6 pt every 3 min. Activity = focus updates
         (`UIFocusSystem.didUpdateNotification`) + selections. Simulator: `SIMCTL_CHILD_DIDI_AMBIENT_AFTER=15`.
         Real Apple TV: paired and tested 2026-11-25.
+      - Overdue alert (in the app only: tvOS apps can't post banners or sounds): when the next dose
+        turns overdue, a full screen over the dashboard and the ambient screen (pulsing red border,
+        the dose in its color, "Late N min"), Taken (focused; via Home) / Later (15 min, this TV
+        only, not the C5's shared snooze); the C5 chime now and every 5 min, silent 2130-0630
+        (`Chime` in `TVTimer.swift`, shared with the timer). Simulator: `SIMCTL_CHILD_DIDI_SAMPLE_LATE=1`
+        adds a sample dose 20 min late.
+      - **Never put the NavigationStack inside a TimelineView** (2026-11-26): on the real TV it
+        re-laid itself out nonstop (main thread 100%, ~4.7 s hangs back to back, the remote nearly
+        frozen; the simulator showed ~90% CPU too). The 5 s clock is a `@State now` set by a task.
+        `.ignoresSafeArea()` on the whole dashboard (outside the NavigationStack too), or it starts
+        inside tvOS's safe area and jumps later. Columns and the banner are `.focusSection()`s
+        (the calendar/weather can't take focus; swipes from the doses/timer found nothing).
+        Profiling the TV: `xctrace record --template 'Time Profiler' --device <udid> --launch --
+        com.averaklabs.meddot` (attaching to the running app failed), dSYM via `dsymutil` on
+        `MedDot.debug.dylib`, `xctrace symbolicate`, then export the time-profile table.
+      - No Appearance setting on the TV (the dashboard is always dark).
       - Simulator builds show sample doses and events (`HomeStore.showSample`,
         `CalendarFeed.showSample`): no Home in the simulator; never on devices.
     - Brand: app icon = the brand mark (7c.5; regenerate with `apple/tools/make_icons.py`, PNGs are
       force-added because of `*.png` in .gitignore). iPhone home: the icon as a 90 pt badge left of a
       page-drawn "Med Dot" title and the date (opens About; iOS 26 nav-bar buttons can't be that
-      big); gear alone in the bar. About (`Shared/AboutView.swift`): the mark at 220 pt, app info,
+      big); gear alone in the bar. About (`Shared/AboutView.swift`): the app icon at 220 pt, app info,
       the Pill Reminder's name/model/firmware from Home.
+    - **Did I? app icon (decided and built 2026-11-26, `make_icons.py`'s `didi()`).** Replaces the logo-on-pill brand
+      mark as the app icon: same two-tone capsule (`pill_layer`, corner to corner, ends inset 9%,
+      ratio 2.55, seam/rim/highlight unchanged) with a question mark in place of the Averak logo
+      ("did I take it?"). Picked on the claude.ai design canvas "Did I? icon color schemes"
+      (Nunito colors card). Reference render: `apple/design/didi_icon_reference.png` (1024, the
+      target look; match it).
+      - Colors: pill left (lower-left half) violet **#6226BA** (98,38,186), right royal **#2563EB**
+        (37,99,235), background **#08142C** (8,20,44) edge to edge.
+      - "?": **Nunito Black** (variable `Nunito[wght].ttf`, wght 1000; OFL, from google/fonts
+        `ofl/nunito`; a tool input only, not shipped in the app: `make_icons.py`'s second argument). Glyph scaled so its ink bbox is
+        600 px tall on the 1024 canvas, centered by bbox, upright (not rotated with the pill).
+      - "?" fill aqua **#67E8F9** (103,232,249) = the cyber logo's cyan.
+      - Outline: the glyph mask dilated with `MaxFilter(25)`, offset +8,+8 px (drop-shadow style,
+        down-right), navy **#0C1A3C** (12,26,60), drawn under the fill.
+      - Glow: the dilated mask, `GaussianBlur(30)`, alpha x 0.30, in the fill color, under the
+        outline. Draw order: background, pill, glow, outline, fill. Scale all px values with size.
+      - Watch: same art (round mask; the ? sits well inside). tvOS front layer: pill + ? with
+        transparency over the #08142C back layer; on the wide 5:3 canvas the pill runs 20%-80% across
+        and 75%-25% down (corner to corner it was too fat and got cut off). AverakBadge (home badge) = the new icon.
+      - The apps' About page shows this icon too (`AppLogo` image set, 660 px, 220 pt; 2026-11-26,
+        replacing the Averak mark there).
+      - Unchanged: the Averak cyber logo + its violet/navy-teal pill (`averak_labs_pill.png`,
+        devices' splash/About) and the plain logo on the top shelf: company mark, not the app icon. So `make_icons.py` needs a second pill color pair for the company mark.
+      - Known trade-off: violet and royal are close in lightness, so in iOS tinted (grayscale)
+        mode the halves nearly merge; the aqua ? carries it. Lighter royal #3B82F6 is the fallback
+        if that matters.
     - Settings (`Shared/SettingsView.swift`, iPhone gear / TV list bottom; not on the Watch):
       "This device" = Appearance (AppStorage, local only); "Pill Reminder" = shared state through
       the app link (7j, `Shared/AppLink.swift`: NWBrowser `_meddot._udp`, CryptoKit pairing, key +

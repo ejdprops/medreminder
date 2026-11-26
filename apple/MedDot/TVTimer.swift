@@ -20,7 +20,6 @@ final class TVTimer {
 
     private var waiter: Task<Void, Never>?
     private var chimes: Task<Void, Never>?
-    private var player: AVAudioPlayer?
 
     var running: Bool { endsAt != nil }
 
@@ -67,7 +66,7 @@ final class TVTimer {
         done = false
         TVAmbient.shared.touch()
         chimes?.cancel()
-        player?.stop()
+        Chime.shared.stop()
         reset()
     }
 
@@ -79,7 +78,7 @@ final class TVTimer {
         chimes = Task { [weak self] in
             for _ in 0..<12 {   // every 10 s for 2 min
                 guard let self, !Task.isCancelled, self.done else { return }
-                self.chime()
+                Chime.shared.play()
                 try? await Task.sleep(for: .seconds(10))
             }
         }
@@ -90,18 +89,33 @@ final class TVTimer {
         TVAmbient.shared.applyIdleTimer()
     }
 
-    private func chime() {
+    /// "9:41", "60:00"
+    static func clock(_ seconds: TimeInterval) -> String {
+        let s = Int(seconds.rounded(.up))
+        return String(format: "%d:%02d", s / 60, s % 60)
+    }
+}
+
+/// The C5's alert chime (C6-E6-G6) through the TV, mixed with whatever else is playing: the timer and
+/// the overdue alert
+final class Chime {
+    static let shared = Chime()
+    private var player: AVAudioPlayer?
+
+    func play() {
         if player == nil {
             try? AVAudioSession.sharedInstance().setCategory(.playback, options: .mixWithOthers)
-            player = try? AVAudioPlayer(data: Self.chimeWAV())
+            player = try? AVAudioPlayer(data: Self.wav())
             player?.volume = 0.8
         }
         player?.currentTime = 0
         player?.play()
     }
 
+    func stop() { player?.stop() }
+
     /// C6-E6-G6 (1047 / 1319 / 1568 Hz), 16 kHz mono, each note decaying: the C5's alert, as a WAV
-    private static func chimeWAV() -> Data {
+    private static func wav() -> Data {
         let rate = 16000
         var samples: [Int16] = []
         for (i, f) in [1047.0, 1319.0, 1568.0].enumerated() {
@@ -123,10 +137,5 @@ final class TVTimer {
         return d
     }
 
-    /// "9:41", "60:00"
-    static func clock(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds.rounded(.up))
-        return String(format: "%d:%02d", s / 60, s % 60)
-    }
 }
 #endif

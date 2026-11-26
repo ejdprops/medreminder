@@ -11,23 +11,49 @@ struct TVDashboardView: View {
     @State private var busy = false
     @State private var error: String? = nil
     @State private var confirmUndo: DoseTile? = nil
+    /// Overdue alert put off on this TV ("Later"), per dose, until
+    @State private var laterUntil: [UUID: Date] = [:]
     /// The remote starts on the next-dose card (not the badge, the first thing in reading order)
     private enum Focus: Hashable { case card }
     @FocusState private var focus: Focus?
 
     private let ambient = TVAmbient.shared
 
+    /// The 5 s clock for the overlays. Not a TimelineView: a NavigationStack inside one re-laid itself out
+    /// nonstop on tvOS (100% CPU on the main thread, the remote nearly frozen).
+    @State private var now = Date.now
+
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 5)) { context in
-            let now = context.date
+        content(now)
+            .task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(5))
+                    now = .now
+                }
+            }
+    }
+
+    private func content(_ now: Date) -> some View {
+        Group {
             let today = store.status == .ready
                 ? Today(tiles: store.doses, overdueOpen: store.overdue == true, now: now) : nil
             let due = today?.next.map { $0.state == .due || $0.state == .overdue } ?? false
             ZStack {
+                // under the pixel shift: what the moved dashboard uncovers is its own color, not gray
+                Dash.bg.ignoresSafeArea()
+                // full screen from the first frame: inside the NavigationStack alone, tvOS first laid it
+                // out within its safe area (~80 pt sides, 60 top/bottom) and flipped later
                 dashboard
+                    .ignoresSafeArea()
                     .offset(ambient.shift(at: now))
                 if ambient.ambient(at: now, doseDue: due), !TVTimer.shared.done {
                     AmbientScreen(next: today?.next, timer: TVTimer.shared, ambient: ambient)
+                        .transition(.opacity)
+                }
+                if let late = today?.next, late.state == .overdue, (laterUntil[late.id] ?? .distantPast) < now {
+                    OverdueAlert(dose: late, busy: busy,
+                                 take: { set(late.tile, taken: true) },
+                                 later: { laterUntil[late.id] = Date.now.addingTimeInterval(15 * 60) })
                         .transition(.opacity)
                 }
                 if TVTimer.shared.done {
@@ -36,11 +62,12 @@ struct TVDashboardView: View {
             }
             .animation(.easeInOut(duration: 0.6), value: ambient.ambient(at: now, doseDue: due))
         }
+        .ignoresSafeArea()
     }
 
     private var dashboard: some View {
         NavigationStack {
-            TimelineView(.periodic(from: .now, by: 15)) { context in
+            TimelineView(.periodic(from: .distantPast, by: 15)) { context in
                 let now = context.date
                 VStack(spacing: Dash.pad) {
                     banner(now)
@@ -125,6 +152,10 @@ struct TVDashboardView: View {
             }
         }
         .frame(height: Dash.banner)
+        // the remote's swipes find the nearest item in an area, not only one straight in line: the
+        // calendar and weather can't take focus, so without these a swipe from the doses (right) or
+        // the timer (left, up) found nothing
+        .focusSection()
     }
 
     // MARK: Columns
@@ -144,6 +175,7 @@ struct TVDashboardView: View {
                 }
             }
             .frame(maxWidth: .infinity)
+            .focusSection()
 
             Tile(title: "CALENDAR", color: Dash.calendar, titleColor: Dash.calendarTitle) {
                 CalendarTile(feed: CalendarFeed.shared)
@@ -160,6 +192,7 @@ struct TVDashboardView: View {
                 }
             }
             .frame(maxWidth: .infinity)
+            .focusSection()
         }
     }
 
@@ -264,15 +297,20 @@ private struct FocusRing: ButtonStyle {
         @Environment(\.isFocused) private var focused
 
         var body: some View {
+            // the halo and shadow only on the focused item: a blur behind every button (even hidden)
+            // made the remote sluggish on the TV
             configuration.label
                 .compositingGroup()
                 .background {
-                    // the halo: the item's shape in its color, blurred, a bit larger than the item
-                    RoundedRectangle(cornerRadius: radius, style: .continuous)
-                        .fill(glow)
-                        .padding(-6)
-                        .blur(radius: 26)
-                        .opacity(focused ? 0.85 : 0)
+                    if focused {
+                        // the halo: the item's shape in its color, blurred, a bit larger than the item
+                        RoundedRectangle(cornerRadius: radius, style: .continuous)
+                            .fill(glow)
+                            .padding(-6)
+                            .blur(radius: 26)
+                            .opacity(0.85)
+                            .transition(.opacity)
+                    }
                 }
                 .shadow(color: .black.opacity(focused ? 0.6 : 0), radius: focused ? 24 : 0, y: focused ? 16 : 0)
                 .brightness(focused ? 0.04 : 0)
@@ -364,9 +402,13 @@ private struct NextCard: View {
                     Text(Today.time(dose.tile.minute))
                         .font(.system(size: 96, weight: .bold))
                         .monospacedDigit()
-                    Spacer()
+                        .fixedSize()
+                        .layoutPriority(1)
+                    Spacer(minLength: 12)
                     Text(Today.when(dose))
                         .font(.system(size: 30, weight: .bold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 6)
                         .foregroundStyle(overdue ? Dash.overdue : fg)
@@ -454,7 +496,7 @@ private struct TimerTile: View {
     let timer: TVTimer
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: timer.running ? 0.25 : 30)) { context in
+        TimelineView(.periodic(from: .distantPast, by: timer.running ? 0.25 : 30)) { context in
             let idle = !timer.running && timer.pausedLeft == nil
             VStack(spacing: 18) {
                 HStack(spacing: 20) {
@@ -504,6 +546,90 @@ private struct TimerTile: View {
             .background(Color(hex: 0x6d28d9), in: RoundedRectangle(cornerRadius: 18))
         }
         .buttonStyle(FocusRing(radius: 18, glow: Color(hex: 0xa78bfa)))
+    }
+}
+
+/// A dose turned overdue (Did I? open): over the dashboard and the ambient screen, pulsing red border,
+/// the dose in its color, Taken (focused) / Later (15 min, this TV only). The C5's chime now and every
+/// 5 min, by day only (2130-0630 silent). Goes away when the dose is taken anywhere.
+private struct OverdueAlert: View {
+    let dose: Today.Dose
+    let busy: Bool
+    let take: () -> Void
+    let later: () -> Void
+    @State private var pulse = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        let color = dose.tile.colorIndex
+        ZStack {
+            Color.black.opacity(0.92)
+            Rectangle()
+                .strokeBorder(Dash.overdue, lineWidth: 24)
+                .opacity(pulse ? 1 : 0.3)
+            VStack(spacing: 44) {
+                Label("Dose overdue", systemImage: "exclamationmark.circle.fill")
+                    .font(.system(size: 64, weight: .bold))
+                    .foregroundStyle(Dash.overdue)
+                VStack(spacing: 10) {
+                    Text(Today.time(dose.tile.minute))
+                        .font(.system(size: 120, weight: .bold))
+                        .monospacedDigit()
+                    Text(dose.tile.name)
+                        .font(.system(size: 64, weight: .semibold))
+                        .lineLimit(1)
+                    Text(Today.when(dose))
+                        .font(.system(size: 34, weight: .bold))
+                        .foregroundStyle(Dash.overdue)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 8)
+                        .background(.white, in: Capsule())
+                }
+                .foregroundStyle(DoseColors.text(color))
+                .padding(.horizontal, 80)
+                .padding(.vertical, 40)
+                .frame(minWidth: 760)
+                .background(DoseColors.color(color), in: RoundedRectangle(cornerRadius: 36, style: .continuous))
+                HStack(spacing: 40) {
+                    Button(action: take) {
+                        Text(busy ? "Taking…" : "Taken")
+                            .font(.system(size: 40, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 340, height: 100)
+                            .background(Color(hex: 0x16a34a), in: RoundedRectangle(cornerRadius: 24))
+                    }
+                    .buttonStyle(FocusRing(radius: 24, glow: Color(hex: 0x22c55e)))
+                    .focused($focused)
+                    .disabled(busy)
+                    Button(action: later) {
+                        Text("Later")
+                            .font(.system(size: 40, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 340, height: 100)
+                            .background(Dash.tile, in: RoundedRectangle(cornerRadius: 24))
+                    }
+                    .buttonStyle(FocusRing(radius: 24, glow: Dash.muted))
+                }
+                Text("Later hides this on the TV for 15 min")
+                    .font(.system(size: 24, weight: .medium))
+                    .foregroundStyle(Dash.muted)
+            }
+        }
+        .ignoresSafeArea()
+        .focusSection()
+        .onAppear {
+            focused = true
+            TVAmbient.shared.touch()
+            withAnimation(.easeInOut(duration: 0.8).repeatForever()) { pulse = true }
+        }
+        .task(id: dose.id) {
+            while !Task.isCancelled {
+                if !TVAmbient.night(.now) { Chime.shared.play() }
+                try? await Task.sleep(for: .seconds(5 * 60))
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Dose overdue: \(dose.tile.name) \(Today.time(dose.tile.minute)), \(Today.when(dose))")
     }
 }
 
@@ -583,7 +709,7 @@ private struct CalendarTile: View {
         case .failed(let why):
             Placeholder(text: why)
         case .ready:
-            TimelineView(.periodic(from: .now, by: 60)) { context in
+            TimelineView(.periodic(from: .distantPast, by: 60)) { context in
                 GeometryReader { geo in
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(Self.fit(rows(context.date), height: geo.size.height)) { row in
@@ -736,7 +862,7 @@ private struct WeatherTile: View {
     }
 
     private func ready(_ w: WeatherStore.Now) -> some View {
-        TimelineView(.periodic(from: .now, by: 60)) { context in
+        TimelineView(.periodic(from: .distantPast, by: 60)) { context in
             VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .center, spacing: 22) {
                     Image(systemName: WeatherStore.symbol(w.code, night: Self.night(context.date)))

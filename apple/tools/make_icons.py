@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""App icons and the in-app logo from the Averak Labs cyber logo.
+"""Did I? app icons and the Averak Labs brand mark.
 
-Needs Pillow + numpy (throwaway venv). From apple/:
-  python tools/make_icons.py ../firmware/main/images/src/averak_labs_cyber.png
-Writes into the asset catalogs: iOS/watchOS AppIcon (1024, opaque), tvOS brand assets (layered
-icons, App Store icon, top shelf images), the AverakLogo image set (About), the AverakBadge (top of the home
-page) and firmware/main/images/src/averak_labs_pill.png (the devices' splash and About art). The app icons get a dark two-tone pill behind the
-logo; About and the top shelf keep the plain logo.
-The logo sits on its own background color (#0b0d14), so the icons are that color edge to edge.
+Needs Pillow + numpy (throwaway venv) and Nunito (variable `Nunito[wght].ttf`, OFL, from google/fonts
+`ofl/nunito`; a tool input only, not shipped). From apple/:
+  python tools/make_icons.py ../firmware/main/images/src/averak_labs_cyber.png <path to Nunito[wght].ttf>
+Writes into the asset catalogs:
+- the Did I? icon (a violet/royal capsule corner to corner with an aqua "?" on navy; reference
+  render apple/design/didi_icon_reference.png): iOS/watchOS AppIcon (1024, opaque), tvOS layered
+  icons (Back navy, Front pill + "?"), the AverakBadge (top of the home page);
+- the AppLogo image set (the apps' About page): the Did I? icon, 660 px;
+- the Averak Labs brand mark (the cyber logo over a violet/navy-teal capsule):
+  firmware/main/images/src/averak_labs_pill.png (the devices' splash and About art);
+- the tvOS top shelf: the plain logo.
+The logo sits on its own background color (#0b0d14), so the brand mark is that color edge to edge.
 """
 import json
 import sys
@@ -31,7 +36,7 @@ def fit(logo, w, h, height_frac=None, box=None, pill=False):
     if pill:
         # the pill first, then the logo over it (its background made transparent, glows kept)
         # corner to corner, ends inset 9% so iOS's rounded mask doesn't cut them
-        p, (px, py) = pill_layer((round(w * 0.09), round(h * 0.91)), (round(w * 0.91), round(h * 0.09)))
+        p, (px, py) = pill_layer(*pill_ends(w, h), MARK_PILL)
         c.paste(p, (px, py), p)
         lt = unblend(l)
         c.paste(lt, (ox, oy), lt)
@@ -53,15 +58,27 @@ def unblend(img):
     return Image.fromarray(out, "RGBA")
 
 
-# Pill halves: dark and muted so the logo's neon lines (cyan, magenta, yellow), drawn on top, stand out
-PILL_LEFT = (98, 38, 186)    # violet
-PILL_RIGHT = (18, 96, 148)   # navy-teal
+# Brand mark pill halves: dark and muted so the logo's neon lines (cyan, magenta, yellow), drawn on
+# top, stand out
+MARK_PILL = ((98, 38, 186), (18, 96, 148))   # violet, navy-teal
+
+# Did I? icon (CLAUDE.md 7i)
+DIDI_BG = (8, 20, 44)          # #08142C
+DIDI_PILL = ((98, 38, 186), (37, 99, 235))   # violet #6226BA, royal #2563EB
+DIDI_FILL = (103, 232, 249)    # aqua #67E8F9, the cyber logo's cyan
+DIDI_OUTLINE = (12, 26, 60)    # navy #0C1A3C
 
 
-def pill_layer(start, end, ratio=2.55):
-    """A two-tone capsule (violet / navy-teal, behind the logo) with a soft glow, a light rim, a dark
-    seam and a faint highlight, in canvas pixels from start (violet end) to end (navy end); width =
-    length / ratio, a real capsule's proportions. Returns the RGBA image and its top-left corner."""
+def pill_ends(w, h):
+    """Corner to corner, ends inset 9% so iOS's rounded mask doesn't cut them"""
+    return (round(w * 0.09), round(h * 0.91)), (round(w * 0.91), round(h * 0.09))
+
+
+def pill_layer(start, end, colors, ratio=2.55):
+    """A two-tone capsule (colors = (start half, end half)) with a soft glow, a light rim, a dark
+    seam and a faint highlight, in canvas pixels from start to end; width = length / ratio, a real
+    capsule's proportions. Returns the RGBA image and its top-left corner."""
+    PILL_LEFT, PILL_RIGHT = colors
     import math
     dx, dy = end[0] - start[0], end[1] - start[1]
     length = round(math.hypot(dx, dy))
@@ -102,30 +119,78 @@ def pill_layer(start, end, ratio=2.55):
     return pill, (center[0] - pill.width // 2, center[1] - pill.height // 2)
 
 
+def question(font_path, size):
+    """The "?" in Nunito Black as an L mask, its ink box `size` px tall (tight crop)"""
+    from PIL import ImageFont
+    big = 2000
+    f = ImageFont.truetype(font_path, big)
+    f.set_variation_by_axes([1000])
+    l, t, r, b = f.getbbox("?")
+    pt = round(big * size / (b - t))
+    f = ImageFont.truetype(font_path, pt)
+    f.set_variation_by_axes([1000])
+    l, t, r, b = f.getbbox("?")
+    m = Image.new("L", (r - l + 4, b - t + 4), 0)
+    ImageDraw.Draw(m).text((2 - l, 2 - t), "?", font=f, fill=255)
+    return m.crop(m.getbbox())
+
+
+def didi(font_path, w, h, background=True):
+    """The Did I? icon: navy, the violet/royal capsule corner to corner, a glow, a navy outline set
+    down-right and the aqua "?" (ink 600/1024 of the height, centered, upright). px values are for
+    1024 and scale with the size. background=False: transparent (tvOS front layer)."""
+    k = min(w, h) / 1024
+    c = Image.new("RGBA", (w, h), DIDI_BG + (255,) if background else (0, 0, 0, 0))
+    # square: corner to corner; wide (tvOS 5:3): shorter and flatter, so the whole capsule fits
+    ends = pill_ends(w, h) if w == h else ((round(w * 0.2), round(h * 0.75)), (round(w * 0.8), round(h * 0.25)))
+    p, (px, py) = pill_layer(*ends, DIDI_PILL)
+    m = max(p.width, p.height)   # composite on a margin so a pill bigger than the canvas blends right
+    big = Image.new("RGBA", (w + 2 * m, h + 2 * m), (0, 0, 0, 0))
+    big.alpha_composite(p, (px + m, py + m))
+    c.alpha_composite(big.crop((m, m, m + w, m + h)))
+    q = question(font_path, round(600 * k))
+    grow = max(3, round(25 * k)) | 1
+    pad = round(80 * k)
+    mask = Image.new("L", (q.width + 2 * pad, q.height + 2 * pad), 0)
+    mask.paste(q, (pad, pad))
+    fat = mask.filter(ImageFilter.MaxFilter(grow))
+    ox, oy = (w - q.width) // 2 - pad, (h - q.height) // 2 - pad
+    off = round(8 * k)
+    glow = fat.filter(ImageFilter.GaussianBlur(30 * k)).point(lambda v: round(v * 0.30))
+    layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    for m, color, dx in [(glow, DIDI_FILL, 0), (fat, DIDI_OUTLINE, off), (mask, DIDI_FILL, 0)]:
+        full = Image.new("L", (w, h), 0)
+        full.paste(m, (ox + dx, oy + dx))
+        solid = Image.new("RGBA", (w, h), color + (255,))
+        solid.putalpha(full)
+        layer.alpha_composite(solid)
+    c.alpha_composite(layer)
+    return c if not background else c.convert("RGB")
+
+
 def write_contents(folder, images):
     (folder / "Contents.json").write_text(json.dumps(
         {"images": images, "info": {"author": "xcode", "version": 1}}, indent=2) + "\n")
 
 
-def main(src):
+def main(src, font):
     plain = Image.open(src).convert("RGB")
     logo = plain
     ios = ROOT / "MedDot/Assets.xcassets"
     watch = ROOT / "MedDotWatch/Assets.xcassets"
 
-    # iOS: the whole logo, 86% of the height (iOS rounds the corners)
+    # iOS: the Did I? icon (iOS rounds the corners)
     d = ios / "AppIcon.appiconset"
-    fit(logo, 1024, 1024, 0.86, pill=True).save(d / "icon-1024.png")
+    icon = didi(font, 1024, 1024)
+    icon.save(d / "icon-1024.png")
     write_contents(d, [{"filename": "icon-1024.png", "idiom": "universal", "platform": "ios", "size": "1024x1024"}])
 
-    # watchOS: round mask, so the logo's corners must stay inside the circle
+    # watchOS: the same art (round mask; the "?" sits well inside)
     d = watch / "AppIcon.appiconset"
-    diag = (logo.width ** 2 + logo.height ** 2) ** 0.5
-    s = 1024 * 0.9 / diag
-    fit(logo, 1024, 1024, box=(round(logo.width * s), round(logo.height * s)), pill=True).save(d / "icon-1024.png")
+    icon.save(d / "icon-1024.png")
     write_contents(d, [{"filename": "icon-1024.png", "idiom": "universal", "platform": "watchos", "size": "1024x1024"}])
 
-    # tvOS: layered icons (Back = background, Front = logo with transparency, Middle = empty)
+    # tvOS: layered icons (Back = navy, Front = pill + "?" with transparency, Middle = empty)
     brand = ios / "App Icon & Top Shelf Image.brandassets"
     for stack, sizes in [("App Icon.imagestack", [(400, 240, "1x"), (800, 480, "2x")]),
                          ("App Icon - App Store.imagestack", [(1280, 768, "1x")])]:
@@ -135,9 +200,9 @@ def main(src):
             for w, h, scale in sizes:
                 name = f"{layer.lower()}-{w}x{h}.png"
                 if layer == "Back":
-                    Image.new("RGB", (w, h), BG).save(d / name)
+                    Image.new("RGB", (w, h), DIDI_BG).save(d / name)
                 elif layer == "Front":
-                    unblend(fit(logo, w, h, 0.86, pill=True)).save(d / name)
+                    didi(font, w, h, background=False).save(d / name)
                 else:
                     Image.new("RGBA", (w, h), (0, 0, 0, 0)).save(d / name)
                 imgs.append({"filename": name, "idiom": "tv", "scale": scale})
@@ -152,20 +217,21 @@ def main(src):
         write_contents(d, imgs)
 
     # The brand mark: logo + pill, square, no rounded corners. Master PNG for the devices' splash and
-    # About screens (firmware/tools/png_image.py converts it), and the apps' About logo (660 px: 220 pt @3x)
+    # About screens (firmware/tools/png_image.py converts it)
     mark = fit(logo, 1024, 1024, 0.86, pill=True)
     mark.save(ROOT.parent / "firmware/main/images/src/averak_labs_pill.png")
-    d = ios / "AverakLogo.imageset"
+    # The apps' About logo: the Did I? icon, 660 px (220 pt @3x)
+    d = ios / "AppLogo.imageset"
     d.mkdir(exist_ok=True)
-    mark.resize((660, 660), Image.LANCZOS).save(d / "averak-logo.png")
-    write_contents(d, [{"filename": "averak-logo.png", "idiom": "universal"}])
+    icon.resize((660, 660), Image.LANCZOS).save(d / "app-logo.png")
+    write_contents(d, [{"filename": "app-logo.png", "idiom": "universal"}])
     # Badge (top of the home page): the iOS app icon at 90 pt @3x
     d = ios / "AverakBadge.imageset"
     d.mkdir(exist_ok=True)
-    fit(logo, 1024, 1024, 0.86, pill=True).resize((270, 270), Image.LANCZOS).save(d / "averak-badge.png")
+    icon.resize((270, 270), Image.LANCZOS).save(d / "averak-badge.png")
     write_contents(d, [{"filename": "averak-badge.png", "idiom": "universal"}])
     print("icons written")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(sys.argv[1], sys.argv[2])

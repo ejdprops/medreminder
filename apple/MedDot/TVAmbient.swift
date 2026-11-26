@@ -23,7 +23,10 @@ final class TVAmbient {
             applyIdleTimer()
         }
     }
-    private(set) var lastActivity = Date.now
+    /// Not observed: every remote move sets it, and redrawing the whole dashboard on each one made the
+    /// remote sluggish. The dashboard's 5 s clock reads it; waking (from the ambient screen) is observed.
+    @ObservationIgnored private(set) var lastActivity = Date.now
+    private(set) var wakes = 0
     /// The ambient block is up: focus moving onto it is not activity
     var showing = false
     let idleAfter: TimeInterval
@@ -53,6 +56,7 @@ final class TVAmbient {
     func wake() {
         showing = false
         lastActivity = .now
+        wakes += 1
     }
 
     static func night(_ d: Date) -> Bool {
@@ -62,6 +66,7 @@ final class TVAmbient {
     }
 
     func ambient(at now: Date, doseDue: Bool) -> Bool {
+        _ = wakes   // observed: a wake takes the ambient screen down at once
         guard keepOn, !doseDue else { return false }
         return now.timeIntervalSince(lastActivity) >= (Self.night(now) ? min(60, idleAfter) : idleAfter)
     }
@@ -90,7 +95,7 @@ struct AmbientScreen: View {
     @FocusState private var focused: Bool
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
+        TimelineView(.periodic(from: .distantPast, by: 1)) { context in
             let now = context.date
             let night = TVAmbient.night(now)
             GeometryReader { geo in

@@ -1,16 +1,16 @@
 #if !os(watchOS)
 import SwiftUI
 
-/// The Averak Labs brand mark (the logo over the pill, as the app icon), with app-icon corners.
-struct AverakLogo: View {
+/// The Did I? app icon (the "?" pill) with app-icon corners, for About.
+struct AppLogo: View {
     var height: CGFloat
 
     var body: some View {
-        Image("AverakLogo")
+        Image("AppLogo")
             .resizable()
             .frame(width: height, height: height)
             .clipShape(RoundedRectangle(cornerRadius: height * 0.2237, style: .continuous))
-            .accessibilityLabel("Averak Labs")
+            .accessibilityLabel("Did I?")
     }
 }
 
@@ -30,7 +30,7 @@ struct AboutView: View {
             Section {
                 HStack {
                     Spacer()
-                    AverakLogo(height: 220)
+                    AppLogo(height: 220)
                     Spacer()
                 }
                 .listRowBackground(Color.clear)
