@@ -2,4 +2,5 @@
 #pragma once
 #include "lvgl.h"
 
+LV_IMAGE_DECLARE(img_averak_logo_corner);
 LV_IMAGE_DECLARE(img_averak_logo_large);

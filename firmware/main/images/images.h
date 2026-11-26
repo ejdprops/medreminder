@@ -3,3 +3,4 @@
 #include "lvgl.h"
 
 LV_IMAGE_DECLARE(img_averak_logo);
+LV_IMAGE_DECLARE(img_averak_logo_small);

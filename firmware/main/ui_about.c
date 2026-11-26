@@ -109,15 +109,16 @@ static void build(void)
     lv_obj_t *title = label(s_screen, "About", &inter_12_bold, UI_T->text);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 54, 17);
 
-    /* Left: logo */
+    /* Left: the brand mark (logo + pill, square, as the app icon) in a tile, centered where the facts are */
     lv_obj_t *tile = plain_obj(s_screen);
-    lv_obj_set_size(tile, 124, 180);
-    lv_obj_set_pos(tile, 4, 50);
-    lv_obj_set_style_radius(tile, 12, 0);
+    lv_obj_set_size(tile, 124, 124);
+    lv_obj_set_pos(tile, 4, 78);
+    lv_obj_set_style_radius(tile, 16, 0);
+    lv_obj_set_style_clip_corner(tile, true, 0);
     lv_obj_set_style_bg_opa(tile, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(tile, lv_color_hex(LOGO_BG), 0);
     lv_obj_t *logo = lv_image_create(tile);
-    lv_image_set_src(logo, &img_averak_logo);
+    lv_image_set_src(logo, &img_averak_logo_small);
     lv_obj_center(logo);
 
     /* Right: facts */

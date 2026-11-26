@@ -405,6 +405,14 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
         fixed height or it wraps instead of truncating.
       - Logo: `tools/cyber_logo.py` recolors `averak_labs_neon.png` -> `averak_labs_cyber.png`
         (yellow AVERAK, glowing magenta strokes); About shows it in a dark tile.
+      - Brand mark (2026-11-25): the cyber logo over a violet/navy capsule running corner to corner,
+        square, same as the Med Dot app icon. `apple/tools/make_icons.py` (Pillow + numpy venv;
+        run from `apple/` with `../firmware/main/images/src/averak_labs_cyber.png`) writes the app
+        icons and `firmware/main/images/src/averak_labs_pill.png`; `tools/png_image.py` turns that
+        into `img_averak_logo` (168 px: C5 and round splash), `img_averak_logo_small` (116 px: C5
+        About, 124 px rounded tile) and, for the dashboard, `img_averak_logo_large` (380 px splash)
+        and `img_averak_logo_corner` (62 px, day screen top left, 3 px from the edges and the list;
+        not on the night screen). New dashboard images must be listed in `dashboard/main/CMakeLists.txt`.
 
   - **7e** (v1.0.0; endpoints come up at boot; Home-side testing
     still to do) Matter accessories

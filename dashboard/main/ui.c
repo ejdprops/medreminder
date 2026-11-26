@@ -45,6 +45,8 @@ static const char *TAG = "ui";
 #define PAD 16
 #define BANNER_H 60
 #define TOP (BANNER_H + 8)
+#define LOGO_PAD 3
+#define LOGO_SIZE (TOP - 2 * LOGO_PAD) /* 62: img_averak_logo_corner is made at this size */
 #define BOTTOM (H - 36) /* status line below */
 /* Three equal columns: doses (list over the next-dose card) | calendar | weather, garage, package */
 #define COL_W ((W - 4 * PAD) / 3)
@@ -1764,6 +1766,14 @@ void ui_start(void)
     s_time_label = label(banner, "", &inter_30_semibold, TIME_COLOR);
     lv_obj_t *sched = nav_button(scr, "Schedule", sched_open_cb);
     lv_obj_set_pos(sched, W - PAD - 150, 8);
+
+    /* Averak Labs mark in the free top-left corner: 3 px from the screen edges and the dose list,
+     * app-icon corners */
+    lv_obj_t *mark = lv_image_create(scr);
+    lv_image_set_src(mark, &img_averak_logo_corner);
+    lv_obj_set_pos(mark, LOGO_PAD, LOGO_PAD);
+    lv_obj_set_style_radius(mark, LOGO_SIZE * 2237 / 10000, 0);
+    lv_obj_set_style_clip_corner(mark, true, 0);
 
     s_dose_area = plain_obj(scr);
     lv_obj_set_size(s_dose_area, W, H);
