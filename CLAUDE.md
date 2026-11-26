@@ -730,6 +730,13 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
         per name (sum of the name's characters into a 6-color list: Evan red, Karen royal blue).
       - Timer (`MedDot/TVTimer.swift`): 5-60 min, Start/Pause/Resume/Reset; "Timer done" full screen
         + the C5 chime every 10 s for 2 min; screen saver off while running.
+      - Keep on screen (`MedDot/TVAmbient.swift`, Settings > This device, off by default): screen saver
+        off while open; burn-in protection: ambient after 5 min without a remote press (1 min at
+        night) = black with one drifting block (time, next dose with its color stripe, timer); any
+        press (incl. Menu) wakes, a due/overdue dose wakes it by itself; night 2130-0630 = the block
+        in dim red; the full dashboard shifts up to 6 pt every 3 min. Activity = focus updates
+        (`UIFocusSystem.didUpdateNotification`) + selections. Simulator: `SIMCTL_CHILD_DIDI_AMBIENT_AFTER=15`.
+        Real Apple TV: paired and tested 2026-11-25.
       - Simulator builds show sample doses and events (`HomeStore.showSample`,
         `CalendarFeed.showSample`): no Home in the simulator; never on devices.
     - Brand: app icon = the brand mark (7c.5; regenerate with `apple/tools/make_icons.py`, PNGs are

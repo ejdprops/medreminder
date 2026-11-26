@@ -216,9 +216,11 @@ extension HomeStore {
             ("Alex", at(260), 13, false), ("Sam", at(380), 8, false),
         ]
         homeName = "Sample Home"
+        let nowMinute = (now.hour ?? 12) * 60 + (now.minute ?? 0)
         doses = sample.map { name, minute, color, taken in
+            // past ones taken, so nothing is due unless tapped (keeps the ambient screen testable)
             DoseTile(id: UUID(), label: "\(name) \(Today.time(minute))", name: name, minute: minute, weekday: nil,
-                     colorIndex: color, room: "Kitchen", taken: taken)
+                     colorIndex: color, room: "Kitchen", taken: taken || minute < nowMinute)
         }.sorted { ($0.minute ?? 0) < ($1.minute ?? 0) }
         overdue = false
         status = .ready

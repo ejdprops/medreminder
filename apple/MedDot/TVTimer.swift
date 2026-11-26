@@ -65,6 +65,7 @@ final class TVTimer {
     /// "Timer done" dismissed
     func dismiss() {
         done = false
+        TVAmbient.shared.touch()
         chimes?.cancel()
         player?.stop()
         reset()
@@ -74,6 +75,7 @@ final class TVTimer {
         endsAt = nil
         pausedLeft = nil
         done = true
+        idle(false)
         chimes = Task { [weak self] in
             for _ in 0..<12 {   // every 10 s for 2 min
                 guard let self, !Task.isCancelled, self.done else { return }
@@ -83,8 +85,9 @@ final class TVTimer {
         }
     }
 
+    /// The screen saver follows the timer and "Keep Did I? on screen" (TVAmbient decides)
     private func idle(_ allowed: Bool) {
-        UIApplication.shared.isIdleTimerDisabled = !allowed
+        TVAmbient.shared.applyIdleTimer()
     }
 
     private func chime() {

@@ -15,12 +15,26 @@ struct TVDashboardView: View {
     private enum Focus: Hashable { case card }
     @FocusState private var focus: Focus?
 
+    private let ambient = TVAmbient.shared
+
     var body: some View {
-        ZStack {
-            dashboard
-            if TVTimer.shared.done {
-                TimerDone(timer: TVTimer.shared)
+        TimelineView(.periodic(from: .now, by: 5)) { context in
+            let now = context.date
+            let today = store.status == .ready
+                ? Today(tiles: store.doses, overdueOpen: store.overdue == true, now: now) : nil
+            let due = today?.next.map { $0.state == .due || $0.state == .overdue } ?? false
+            ZStack {
+                dashboard
+                    .offset(ambient.shift(at: now))
+                if ambient.ambient(at: now, doseDue: due), !TVTimer.shared.done {
+                    AmbientScreen(next: today?.next, timer: TVTimer.shared, ambient: ambient)
+                        .transition(.opacity)
+                }
+                if TVTimer.shared.done {
+                    TimerDone(timer: TVTimer.shared)
+                }
             }
+            .animation(.easeInOut(duration: 0.6), value: ambient.ambient(at: now, doseDue: due))
         }
     }
 
@@ -166,6 +180,7 @@ struct TVDashboardView: View {
 
     /// A row: taken = ask to undo; the next one (or any due / late) = take; later ones do nothing
     private func tapRow(_ dose: Today.Dose, today: Today) {
+        ambient.touch()
         switch dose.state {
         case .taken: confirmUndo = dose.tile
         case .overdue, .due: set(dose.tile, taken: true)
@@ -175,6 +190,7 @@ struct TVDashboardView: View {
     }
 
     private func set(_ dose: DoseTile, taken: Bool) {
+        ambient.touch()
         busy = true
         Task {
             defer { busy = false }
@@ -223,7 +239,7 @@ private enum Dash {
     static let rows = 5               // as on the C5 and the panel
 }
 
-private extension Color {
+extension Color {
     init(hex: UInt32) {
         self.init(red: Double(hex >> 16 & 0xff) / 255, green: Double(hex >> 8 & 0xff) / 255,
                   blue: Double(hex & 0xff) / 255)
@@ -471,7 +487,10 @@ private struct TimerTile: View {
 
     /// A purple button; "minus" / "plus" are symbols
     private func button(_ title: String, wide: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button {
+            TVAmbient.shared.touch()
+            action()
+        } label: {
             Group {
                 if wide {
                     Text(title).font(.system(size: 30, weight: .bold))

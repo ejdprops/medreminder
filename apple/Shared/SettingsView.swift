@@ -42,6 +42,8 @@ struct SettingsView: View {
                 } label: {
                     LabeledContent("Weather location", value: WeatherStore.shared.chosen?.name ?? "Automatic")
                 }
+                Toggle("Keep Did I? on screen", isOn: Binding(
+                    get: { TVAmbient.shared.keepOn }, set: { TVAmbient.shared.keepOn = $0 }))
                 NavigationLink {
                     CalendarFeedView()
                 } label: {
