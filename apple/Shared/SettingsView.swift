@@ -45,6 +45,13 @@ struct SettingsView: View {
             } footer: {
                 Text("Shared by every device. Changes are saved on the Pill Reminder.")
             }
+            Section {
+                NavigationLink {
+                    AboutView()
+                } label: {
+                    Label("About", systemImage: "info.circle")
+                }
+            }
         }
         .navigationTitle("Settings")
         .task { await link.start() }

@@ -1,1 +1,18 @@
-{ "images" : [ { "idiom" : "tv", "scale" : "1x" }, { "idiom" : "tv", "scale" : "2x" }, { "idiom" : "tv-marketing", "scale" : "1x" }, { "idiom" : "tv-marketing", "scale" : "2x" } ], "info" : { "author" : "xcode", "version" : 1 } }
+{
+  "images": [
+    {
+      "filename": "topshelf-1920x720@1x.png",
+      "idiom": "tv",
+      "scale": "1x"
+    },
+    {
+      "filename": "topshelf-1920x720@2x.png",
+      "idiom": "tv",
+      "scale": "2x"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  }
+}

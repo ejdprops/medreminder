@@ -28,6 +28,8 @@ final class HomeStore: NSObject {
     private(set) var homeName = ""
     private(set) var doses: [DoseTile] = []
     private(set) var overdue: Bool? = nil   // the "Dose overdue" contact sensor: open = overdue
+    /// The Pill Reminder itself (the Matter bridge): name in Home, model, firmware version
+    private(set) var reminder: (name: String, model: String, firmware: String)? = nil
 
     @ObservationIgnored private let manager = HMHomeManager()
     @ObservationIgnored private var followed: Set<UUID> = []   // characteristics already set up
@@ -68,6 +70,10 @@ final class HomeStore: NSObject {
             doses = []
             overdue = nil
             return
+        }
+
+        if let bridge = ours.first(where: { !$0.isBridged }) {
+            reminder = (bridge.name, bridge.model ?? "", bridge.firmwareVersion ?? "")
         }
 
         var tiles: [DoseTile] = []

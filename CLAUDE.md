@@ -709,6 +709,11 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       `dose_colors.c`, keep in step) from the serial's `-C<index>`; slate if missing. The serial is
       read via its HAP type id (`HMCharacteristicTypeSerialNumber` is deprecated but still works).
       Checked 2026-11-25: colors match the C5.
+    - Brand: app icon = the brand mark (7c.5; regenerate with `apple/tools/make_icons.py`, PNGs are
+      force-added because of `*.png` in .gitignore). iPhone home: the icon as a 90 pt badge left of a
+      page-drawn "Med Dot" title and the date (opens About; iOS 26 nav-bar buttons can't be that
+      big); gear alone in the bar. About (`Shared/AboutView.swift`): the mark at 220 pt, app info,
+      the Pill Reminder's name/model/firmware from Home.
     - Settings (`Shared/SettingsView.swift`, iPhone gear / TV list bottom; not on the Watch):
       "This device" = Appearance (AppStorage, local only); "Pill Reminder" = shared state through
       the app link (7j, `Shared/AppLink.swift`: NWBrowser `_meddot._udp`, CryptoKit pairing, key +

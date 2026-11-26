@@ -30,12 +30,16 @@ struct PhoneDosesView: View {
                     }
                 }
             }
-            .navigationTitle("Med Dot")
+            .navigationTitle("Med Dot")   // back buttons; the page shows its own title under the badge
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                NavigationLink {
-                    SettingsView()
-                } label: {
-                    Label("Settings", systemImage: "gearshape")
+                ToolbarItem(placement: .principal) { Color.clear.frame(width: 1, height: 1) }
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink {
+                        SettingsView()
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                    }
                 }
             }
             .alert("Home didn't take the change", isPresented: Binding(
@@ -50,9 +54,27 @@ struct PhoneDosesView: View {
     private func ready(_ today: Today, now: Date) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text(Self.banner(now))
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
+                // Header: the Averak Labs badge (the app icon, 90 pt; opens About) to the left of the title
+                // and the date
+                HStack(spacing: 14) {
+                    NavigationLink {
+                        AboutView()
+                    } label: {
+                        Image("AverakBadge")
+                            .resizable()
+                            .frame(width: 90, height: 90)
+                            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("About")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Med Dot")
+                            .font(.largeTitle.bold())
+                        Text(Self.banner(now))
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
                 if let next = today.next {
                     NextCard(dose: next, busy: busy) { set(next.tile, taken: true) }
