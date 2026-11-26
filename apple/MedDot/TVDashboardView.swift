@@ -177,16 +177,28 @@ struct TVDashboardView: View {
             .frame(maxWidth: .infinity)
             .focusSection()
 
-            Tile(title: "CALENDAR", color: Dash.calendar, titleColor: Dash.calendarTitle) {
-                CalendarTile(feed: CalendarFeed.shared)
+            // select: every event for the next 14 days (the tile shows what fits), feed link at the end
+            NavigationLink {
+                CalendarAgenda(feed: CalendarFeed.shared)
+            } label: {
+                Tile(title: "CALENDAR", color: Dash.calendar, titleColor: Dash.calendarTitle) {
+                    CalendarTile(feed: CalendarFeed.shared)
+                }
             }
+            .buttonStyle(FocusRing(glow: Dash.calendarTitle, lift: FocusRing.tile))
             .frame(maxWidth: .infinity)
 
             VStack(spacing: Dash.pad) {
-                Tile(title: weather.placeName.map { "WEATHER · \($0.uppercased())" } ?? "WEATHER",
-                     color: Dash.weather, titleColor: Dash.weatherTitle) {
-                    WeatherTile(weather: weather)
+                // select: Weather location
+                NavigationLink {
+                    WeatherPlaceView()
+                } label: {
+                    Tile(title: weather.placeName.map { "WEATHER · \($0.uppercased())" } ?? "WEATHER",
+                         color: Dash.weather, titleColor: Dash.weatherTitle) {
+                        WeatherTile(weather: weather)
+                    }
                 }
+                .buttonStyle(FocusRing(glow: Dash.weatherTitle, lift: FocusRing.tile))
                 Tile(title: "TIMER", color: Dash.timer, titleColor: Dash.timerTitle) {
                     TimerTile(timer: TVTimer.shared)
                 }
@@ -285,15 +297,19 @@ extension Color {
 private struct FocusRing: ButtonStyle {
     var radius: CGFloat = Dash.radius
     var glow: Color = .white
+    /// How much the focused item grows; whole tiles use less (`.tile`) so they don't crowd the columns
+    var lift: CGFloat = 1.06
+    static let tile: CGFloat = 1.02
 
     func makeBody(configuration: Configuration) -> some View {
-        Lift(configuration: configuration, radius: radius, glow: glow)
+        Lift(configuration: configuration, radius: radius, glow: glow, lift: lift)
     }
 
     private struct Lift: View {
         let configuration: Configuration
         let radius: CGFloat
         let glow: Color
+        let lift: CGFloat
         @Environment(\.isFocused) private var focused
 
         var body: some View {
@@ -314,7 +330,7 @@ private struct FocusRing: ButtonStyle {
                 }
                 .shadow(color: .black.opacity(focused ? 0.6 : 0), radius: focused ? 24 : 0, y: focused ? 16 : 0)
                 .brightness(focused ? 0.04 : 0)
-                .scaleEffect(configuration.isPressed ? 1.02 : focused ? 1.06 : 1)
+                .scaleEffect(configuration.isPressed ? 1 + (lift - 1) / 3 : focused ? lift : 1)
                 .zIndex(focused ? 1 : 0)
                 .animation(.easeOut(duration: 0.18), value: focused)
                 .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
@@ -680,7 +696,7 @@ private struct TimerDone: View {
 private struct CalendarTile: View {
     let feed: CalendarFeed
 
-    private enum Row: Identifiable {
+    enum Row: Identifiable {
         case day(String, today: Bool)
         case event(CalendarFeed.Event, time: String?, id: String)
         case none(String)
@@ -712,8 +728,8 @@ private struct CalendarTile: View {
             TimelineView(.periodic(from: .distantPast, by: 60)) { context in
                 GeometryReader { geo in
                     VStack(alignment: .leading, spacing: 8) {
-                        ForEach(Self.fit(rows(context.date), height: geo.size.height)) { row in
-                            view(row)
+                        ForEach(Self.fit(Self.rows(feed.events, now: context.date), height: geo.size.height)) { row in
+                            Self.view(row)
                         }
                     }
                 }
@@ -722,7 +738,7 @@ private struct CalendarTile: View {
     }
 
     @ViewBuilder
-    private func view(_ row: Row) -> some View {
+    static func view(_ row: Row) -> some View {
         switch row {
         case .day(let title, let today):
             Text(title)
@@ -758,7 +774,7 @@ private struct CalendarTile: View {
 
     /// Bands and chips for the coming days; today always (or "Nothing else today"), other days only
     /// with something on them
-    private func rows(_ now: Date) -> [Row] {
+    static func rows(_ events: [CalendarFeed.Event], now: Date) -> [Row] {
         let cal = Calendar.current
         let today = cal.startOfDay(for: now)
         var out: [Row] = []
@@ -766,7 +782,7 @@ private struct CalendarTile: View {
             guard let day = cal.date(byAdding: .day, value: d, to: today),
                   let next = cal.date(byAdding: .day, value: 1, to: day) else { continue }
             var items: [Row] = []
-            for e in feed.events where e.start < next && (e.end > day || e.start >= day) {
+            for e in events where e.start < next && (e.end > day || e.start >= day) {
                 let starts = e.start >= day
                 if d == 0, !e.allDay, e.end <= now, e.start < now { continue }   // over today
                 let time = !e.allDay && starts ? Today.time(cal.component(.hour, from: e.start) * 60
@@ -810,6 +826,65 @@ private struct CalendarTile: View {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "EEE d MMM"
         return f.string(from: day).uppercased()
+    }
+}
+
+/// Calendar selected: every event for the next 14 days in the tile's style (day bands, chips), scrolled
+/// with the remote (each event takes focus so the list can move), then "Calendar feed" to change the
+/// link. Same rules as the tile: today's timed events drop off when over.
+private struct CalendarAgenda: View {
+    let feed: CalendarFeed
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("CALENDAR")
+                    .font(.system(size: 34, weight: .bold))
+                    .foregroundStyle(Dash.calendarTitle)
+                    .padding(.bottom, 10)
+                if feed.status == .ready {
+                    ForEach(CalendarTile.rows(feed.events, now: .now)) { row in
+                        switch row {
+                        case .event:
+                            Button {} label: { CalendarTile.view(row) }
+                                .buttonStyle(FocusRing(radius: 12, glow: Cal.allDayEdge, lift: FocusRing.tile))
+                        default:
+                            CalendarTile.view(row)
+                                .padding(.top, 10)
+                        }
+                    }
+                } else {
+                    Text(Self.why(feed.status))
+                        .font(.system(size: 28, weight: .medium))
+                        .foregroundStyle(Dash.calendarTitle)
+                }
+                NavigationLink {
+                    CalendarFeedView()
+                } label: {
+                    Label("Calendar feed", systemImage: "link")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 26)
+                        .frame(height: 70)
+                        .background(Cal.band, in: RoundedRectangle(cornerRadius: 18))
+                }
+                .buttonStyle(FocusRing(radius: 18, glow: Cal.allDayEdge))
+                .padding(.top, 30)
+            }
+            .frame(maxWidth: 1100, alignment: .leading)
+            .padding(.vertical, 60)
+            .frame(maxWidth: .infinity)
+        }
+        .background(Dash.calendar.ignoresSafeArea())
+    }
+
+    private static func why(_ status: CalendarFeed.Status) -> String {
+        switch status {
+        case .noFeed: "No calendar yet: add its feed link below."
+        case .loading: "Getting the calendar…"
+        case .failed(let why): why
+        case .ready: ""
+        }
     }
 }
 

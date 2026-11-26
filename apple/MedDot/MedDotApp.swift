@@ -11,7 +11,7 @@ struct MedDotApp: App {
                 #if os(iOS)
                 PhoneDosesView()
                 #elseif os(tvOS)
-                TVDashboardView()
+                TVSplashHost { TVDashboardView() }
                 #else
                 DosesView()
                 #endif

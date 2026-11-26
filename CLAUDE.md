@@ -753,6 +753,9 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
         com.averaklabs.meddot` (attaching to the running app failed), dSYM via `dsymutil` on
         `MedDot.debug.dylib`, `xctrace symbolicate`, then export the time-profile table.
       - No Appearance setting on the TV (the dashboard is always dark).
+      - The calendar and weather tiles are buttons (glow, 2% lift: `FocusRing(lift: FocusRing.tile)`).
+        Weather -> Weather location. Calendar -> `CalendarAgenda`: every event for the 14 days in
+        the tile's style (each event focusable so the remote can scroll), "Calendar feed" at the end.
       - Simulator builds show sample doses and events (`HomeStore.showSample`,
         `CalendarFeed.showSample`): no Home in the simulator; never on devices.
     - Brand: app icon = the brand mark (7c.5; regenerate with `apple/tools/make_icons.py`, PNGs are
@@ -786,6 +789,32 @@ reads); opening the port resets the board. Factory flash: `~/esp/backups/crowpan
       - Known trade-off: violet and royal are close in lightness, so in iOS tinted (grayscale)
         mode the halves nearly merge; the aqua ? carries it. Lighter royal #3B82F6 is the fallback
         if that matters.
+    - **Apple TV splash** (`MedDot/TVSplashView.swift`, 2026-11-26, written in the desktop app;
+      checked on the real TV): `TVSplashHost { TVDashboardView() }` in `MedDotApp` lays the splash over the
+      dashboard at launch (the dashboard and Home load underneath) and fades it out (0.4 s).
+      Approved from a claude.ai preview ("Did I? Apple TV splash", Rack focus). ~4.5 s, any remote
+      press (Select, Play/Pause, a swipe, Menu) skips it. Times in s; layout in a 1920x1080 design
+      space scaled to the view; easing = CSS cubic-bezier over the whole move (`CubicBezier`).
+      - Background: elliptical gradient at (0.5, 0.55): #0E2148 -> #08142C (55%) -> #060E20.
+      - Rain (0-~2.3 s, `SplashPill`, drawn in a Canvas): 26 pills, new random set each launch,
+        shapes capsule (two-tone, 3 of 8), scored round tablet, scored oval, translucent softgel,
+        small round (2 of 8); colors from the brighter half of `dose_colors.c`. Start i/26 x 0.9 s
+        + 0-0.25 s, fall 1.0-1.5 s, y -260 -> 1300 (top-left of the shape), x drifts +-140,
+        rotation +-540 deg, scale 0.7-1.25; under 0.9 = far: blur 1.5, 75% brightness, 20% slower,
+        else a drop shadow. Easing (.45, 0, .9, .55): gravity.
+      - Logo (`SplashLogo`, the icon without background, 520 pt box incl. glow margin, center x 50%,
+        y 44%): rack focus 1.35-3.95 s, easing (.25, .8, .25, 1), keyframes at 0 / .3 / .85 / 1:
+        opacity 0 / .7 / 1 / 1, scale 3.4 / 2.2 / .97 / 1, blur 40 / 24 / 0 / 0 (design px).
+      - Wordmark (`SplashWord`, 409x178 pt, center y 787): 2.75-3.05 s, rises 24 px and sharpens
+        from blur 8, easing (.2, .7, .2, 1). It starts while the logo is still pulling back: later
+        felt slow (tried 4.0 and 3.35 s).
+      - Reduce Motion: no rain, logo fades in 0.3 s, wordmark 0.3-0.6 s, done at 1.2 s.
+      - Art: `apple/tools/make_splash_assets.py <Nunito[wght].ttf>` (uses make_icons.py's
+        `pill_layer`/`question`) writes the SplashLogo and SplashWord image sets; PNGs force-added.
+      - Focus after the splash: the next-dose card when it can take focus; more than 60 min before
+        the dose the card is disabled ("Not due yet") and focus goes to the badge (fine, user OK).
+        A fresh install's location/Home prompts show over the splash. Not done: a #08142C tvOS
+        launch screen background (launch -> splash may flash).
     - Settings (`Shared/SettingsView.swift`, iPhone gear / TV list bottom; not on the Watch):
       "This device" = Appearance (AppStorage, local only); "Pill Reminder" = shared state through
       the app link (7j, `Shared/AppLink.swift`: NWBrowser `_meddot._udp`, CryptoKit pairing, key +
